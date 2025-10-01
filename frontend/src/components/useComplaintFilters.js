@@ -7,9 +7,14 @@ export const useComplaintFilters = (complaints) => {
   // Filter and sort complaints based on date and priority
   const getFilteredAndSortedComplaints = useMemo(() => {
     return (status) => {
-      let filtered = complaints.filter(
-        (complaint) => complaint.status === status
-      );
+      let filtered = complaints.filter((complaint) => {
+        // Handle special case for pending: include department-rejected complaints
+        if (status === "pending") {
+          return complaint.status === "pending" || complaint.status === "rejected_by_department";
+        }
+        // For other statuses, use exact match
+        return complaint.status === status;
+      });
 
       // Apply priority filter
       if (priorityFilter !== "all") {

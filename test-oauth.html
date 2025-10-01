@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Google OAuth Test</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cross-Origin-Opener-Policy" content="unsafe-none" />
+    <meta http-equiv="Cross-Origin-Embedder-Policy" content="unsafe-none" />
+    <meta http-equiv="Referrer-Policy" content="no-referrer-when-downgrade" />
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+    <h1>Google OAuth Test</h1>
+    
+    <div id="g_id_onload"
+         data-client_id="YOUR_GOOGLE_CLIENT_ID"
+         data-context="signin"
+         data-ux_mode="popup"
+         data-callback="handleCredentialResponse"
+         data-auto_prompt="false">
+    </div>
+    
+    <div class="g_id_signin"
+         data-type="standard"
+         data-shape="rectangular"
+         data-theme="outline"
+         data-text="signin_with"
+         data-size="large"
+         data-logo_alignment="left">
+    </div>
+    
+    <div id="result"></div>
+    
+    <script>
+        function handleCredentialResponse(response) {
+            console.log("Google OAuth Response:", response);
+            document.getElementById('result').innerHTML = '<p>Received credential: ' + response.credential.substring(0, 50) + '...</p>';
+            
+            // Test API call
+            testGoogleLogin(response.credential);
+        }
+        
+        async function testGoogleLogin(credential) {
+            try {
+                console.log('Making request to backend...');
+                
+                const response = await fetch('http://localhost:5000/auth/google', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    credentials: 'include',
+                    mode: 'cors',
+                    body: JSON.stringify({ token: credential })
+                });
+                
+                console.log('Response status:', response.status);
+                console.log('Response headers:', response.headers);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('Login successful:', data);
+                    document.getElementById('result').innerHTML += '<p style="color: green">✅ Google login successful!</p>';
+                } else {
+                    const error = await response.text();
+                    console.error('Login failed:', error);
+                    document.getElementById('result').innerHTML += '<p style="color: red">❌ Login failed: ' + error + '</p>';
+                }
+            } catch (error) {
+                console.error('Request failed:', error);
+                document.getElementById('result').innerHTML += '<p style="color: red">❌ Request failed: ' + error.message + '</p>';
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import './CompleteProfile.css';
 
 function CompleteProfile() {
   const navigate = useNavigate();
@@ -10,13 +11,15 @@ function CompleteProfile() {
     address: "",
     pincode: "",
     city: "",
-    state: ""
+    state: "",
+    district: ""
   });
   
   const [loading, setLoading] = useState(false);
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [errors, setErrors] = useState({});
   const [message, setMessage] = useState("");
+  const [manualLocationInput, setManualLocationInput] = useState(false);
 
   // Validation function
   const validateForm = () => {
@@ -30,6 +33,7 @@ function CompleteProfile() {
     else if (!/^\d{6}$/.test(form.pincode)) newErrors.pincode = "Enter valid 6-digit pincode";
     if (!form.city.trim()) newErrors.city = "City is required";
     if (!form.state.trim()) newErrors.state = "State is required";
+    if (!form.district.trim()) newErrors.district = "District is required";
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -50,34 +54,44 @@ function CompleteProfile() {
       fetchPincodeData(value);
     } else if (name === "pincode") {
       // Clear city and state if pincode is invalid
-      setForm(prev => ({ ...prev, city: "", state: "" }));
+      setForm(prev => ({ ...prev, city: "", state: "", district: "" }));
+      setManualLocationInput(false);
     }
   };
 
   const fetchPincodeData = async (pincode) => {
     setPincodeLoading(true);
     try {
-      const response = await fetch(`https://api.postalpincode.in/pincode/${pincode}`);
-      if (!response.ok) throw new Error('Network response was not ok');
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/user/pincode/${pincode}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
       
       const data = await response.json();
       
-      if (data[0]?.Status === "Success" && data[0].PostOffice?.length > 0) {
+      if (response.ok && data.success) {
         setForm(prev => ({
           ...prev,
-          city: data[0].PostOffice[0].District || "",
-          state: data[0].PostOffice[0].State || ""
+          city: data.data.city || "",
+          state: data.data.state || "",
+          district: data.data.city || ""
         }));
-        setMessage("Location details fetched successfully!");
-        setTimeout(() => setMessage(""), 3000);
+        setManualLocationInput(false);
+        alert("Location details fetched successfully!");
       } else {
-        setForm(prev => ({ ...prev, city: "", state: "" }));
-        setErrors(prev => ({ ...prev, pincode: "Invalid pincode" }));
+        setForm(prev => ({ ...prev, city: "", state: "", district: "" }));
+        setManualLocationInput(true);
+        setErrors(prev => ({ ...prev, pincode: data.error || "Invalid pincode" }));
       }
     } catch (error) {
       console.error("Error fetching pincode data:", error);
-      setForm(prev => ({ ...prev, city: "", state: "" }));
-      setErrors(prev => ({ ...prev, pincode: "Failed to fetch location data" }));
+      // More user-friendly error handling
+      setErrors(prev => ({ ...prev, pincode: "Network error. Please enter city and state manually." }));
+      // Allow manual input
+      setForm(prev => ({ ...prev, city: "", state: "", district: "" }));
+      setManualLocationInput(true);
     } finally {
       setPincodeLoading(false);
     }
@@ -99,7 +113,7 @@ function CompleteProfile() {
         throw new Error("Authentication token not found");
       }
 
-      const response = await fetch("http://localhost:5000/user/complete", {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/user/complete`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -109,8 +123,17 @@ function CompleteProfile() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || "Failed to save profile");
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error('Server returned non-JSON response. Please check if the server is running correctly.');
+      }
+
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
       }
 
       setMessage("Profile saved successfully!");
@@ -118,125 +141,161 @@ function CompleteProfile() {
       
     } catch (error) {
       console.error("Error saving profile:", error);
-      setMessage(error.message || "Failed to save profile. Please try again.");
+      if (error.message.includes('non-JSON response')) {
+        setMessage('Server error: The server is not responding correctly. Please check if the backend is running.');
+      } else {
+        setMessage(error.message || "Failed to save profile. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const inputStyle = {
-    padding: "8px",
-    margin: "5px",
-    border: "1px solid #ccc",
-    borderRadius: "4px",
-    width: "200px"
-  };
-
-  const errorInputStyle = {
-    ...inputStyle,
-    borderColor: "#ff0000"
-  };
-
-  const buttonStyle = {
-    padding: "10px 20px",
-    margin: "10px",
-    border: "1px solid #007bff",
-    borderRadius: "4px",
-    backgroundColor: "#007bff",
-    color: "white",
-    cursor: "pointer"
-  };
-
-  const disabledButtonStyle = {
-    ...buttonStyle,
-    backgroundColor: "#ccc",
-    borderColor: "#ccc",
-    cursor: "not-allowed"
-  };
-
   return (
-    <div style={{ textAlign: "center", marginTop: "50px" }}>
-      <h2>Complete Your Profile</h2>
-      
-      {message && (
-        <div style={{ 
-          color: message.includes('success') ? 'green' : 'red',
-          margin: "10px 0"
-        }}>
-          {message}
+    <div className="complete-profile-container">
+      <div className="profile-card">
+        <div className="profile-header">
+          <h1 className="profile-title">Complete Your Profile</h1>
+          <p className="profile-subtitle">Fill in your details to continue</p>
         </div>
-      )}
 
-      <input
-        name="name"
-        placeholder="Name"
-        value={form.name}
-        onChange={handleChange}
-        style={errors.name ? errorInputStyle : inputStyle}
-      />
-      {errors.name && <div style={{ color: "red", fontSize: "12px" }}>{errors.name}</div>}
-      <br />
+        {message && (
+          <div className={`message ${message.includes('success') ? 'success' : 'error'}`}>
+            {message}
+          </div>
+        )}
 
-      <input
-        name="phone"
-        placeholder="Phone"
-        value={form.phone}
-        onChange={handleChange}
-        maxLength="10"
-        style={errors.phone ? errorInputStyle : inputStyle}
-      />
-      {errors.phone && <div style={{ color: "red", fontSize: "12px" }}>{errors.phone}</div>}
-      <br />
+        <form className="profile-form" onSubmit={(e) => e.preventDefault()}>
+          <div className="form-group">
+            <label className="form-label" htmlFor="name">Full Name</label>
+            <input
+              id="name"
+              name="name"
+              type="text"
+              placeholder="Enter your full name"
+              value={form.name}
+              onChange={handleChange}
+              className={`form-input ${errors.name ? 'error' : ''}`}
+            />
+            {errors.name && <div className="error-text">{errors.name}</div>}
+          </div>
 
-      <input
-        name="address"
-        placeholder="Address"
-        value={form.address}
-        onChange={handleChange}
-        style={errors.address ? errorInputStyle : inputStyle}
-      />
-      {errors.address && <div style={{ color: "red", fontSize: "12px" }}>{errors.address}</div>}
-      <br />
+          <div className="form-group">
+            <label className="form-label" htmlFor="phone">Phone Number</label>
+            <input
+              id="phone"
+              name="phone"
+              type="tel"
+              placeholder="Enter your phone number"
+              value={form.phone}
+              onChange={handleChange}
+              maxLength="10"
+              className={`form-input ${errors.phone ? 'error' : ''}`}
+            />
+            {errors.phone && <div className="error-text">{errors.phone}</div>}
+          </div>
 
-      <input
-        name="pincode"
-        placeholder="Pincode"
-        value={form.pincode}
-        onChange={handleChange}
-        maxLength="6"
-        style={errors.pincode ? errorInputStyle : inputStyle}
-      />
-      {pincodeLoading && <span style={{ color: "blue" }}> Loading...</span>}
-      {errors.pincode && <div style={{ color: "red", fontSize: "12px" }}>{errors.pincode}</div>}
-      <br />
+          <div className="form-group">
+            <label className="form-label" htmlFor="address">Address</label>
+            <textarea
+              id="address"
+              name="address"
+              placeholder="Enter your complete address"
+              value={form.address}
+              onChange={handleChange}
+              className={`form-input form-textarea ${errors.address ? 'error' : ''}`}
+              rows="3"
+            />
+            {errors.address && <div className="error-text">{errors.address}</div>}
+          </div>
 
-      <input
-        name="city"
-        placeholder="City"
-        value={form.city}
-        readOnly
-        style={{...inputStyle, backgroundColor: "#f5f5f5"}}
-      />
-      {errors.city && <div style={{ color: "red", fontSize: "12px" }}>{errors.city}</div>}
-      <br />
+          <div className="form-group">
+            <label className="form-label" htmlFor="pincode">Pincode</label>
+            <div className="pincode-container">
+              <input
+                id="pincode"
+                name="pincode"
+                type="text"
+                placeholder="Enter 6-digit pincode"
+                value={form.pincode}
+                onChange={handleChange}
+                maxLength="6"
+                className={`form-input ${errors.pincode ? 'error' : ''}`}
+              />
+              {pincodeLoading && (
+                <div className="loading-indicator">
+                  <div className="spinner"></div>
+                  <span>Fetching location...</span>
+                </div>
+              )}
+            </div>
+            {errors.pincode && <div className="error-text">{errors.pincode}</div>}
+          </div>
 
-      <input
-        name="state"
-        placeholder="State"
-        value={form.state}
-        readOnly
-        style={{...inputStyle, backgroundColor: "#f5f5f5"}}
-      />
-      {errors.state && <div style={{ color: "red", fontSize: "12px" }}>{errors.state}</div>}
-      <br />
+          <div className="form-row">
+            <div className="form-group">
+              <label className="form-label" htmlFor="city">City</label>
+              <input
+                id="city"
+                name="city"
+                type="text"
+                placeholder="City"
+                value={form.city}
+                onChange={handleChange}
+                readOnly={!manualLocationInput}
+                className={`form-input ${errors.city ? 'error' : ''} ${!manualLocationInput ? 'readonly' : ''}`}
+              />
+              {errors.city && <div className="error-text">{errors.city}</div>}
+            </div>
 
-      <button 
-        onClick={handleSubmit}
-        disabled={loading || pincodeLoading}
-        style={loading || pincodeLoading ? disabledButtonStyle : buttonStyle}
-      >
-        {loading ? 'Saving...' : 'Save Profile'}
-      </button>
+            <div className="form-group">
+              <label className="form-label" htmlFor="district">District</label>
+              <input
+                id="district"
+                name="district"
+                type="text"
+                placeholder="District"
+                value={form.district}
+                onChange={handleChange}
+                readOnly={!manualLocationInput}
+                className={`form-input ${errors.district ? 'error' : ''} ${!manualLocationInput ? 'readonly' : ''}`}
+              />
+              {errors.district && <div className="error-text">{errors.district}</div>}
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="state">State</label>
+            <input
+              id="state"
+              name="state"
+              type="text"
+              placeholder="State"
+              value={form.state}
+              onChange={handleChange}
+              readOnly={!manualLocationInput}
+              className={`form-input ${errors.state ? 'error' : ''} ${!manualLocationInput ? 'readonly' : ''}`}
+            />
+            {errors.state && <div className="error-text">{errors.state}</div>}
+          </div>
+
+          <button 
+            type="button"
+            onClick={handleSubmit}
+            disabled={loading || pincodeLoading}
+            className={`save-button ${loading || pincodeLoading ? 'disabled' : ''}`}
+          >
+            {loading ? (
+              <>
+                <div className="button-spinner"></div>
+                Saving Profile...
+              </>
+            ) : (
+              'Save Profile'
+            )}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

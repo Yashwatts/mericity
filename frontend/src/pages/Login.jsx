@@ -2,6 +2,7 @@
     import React, { useState, useEffect } from "react";
     import { GoogleLogin } from "@react-oauth/google";
     import { useNavigate } from "react-router-dom";
+    import { api, APIError } from "../utils/api";
 
     // Multilingual quotes as specified
     const quotes = {
@@ -149,10 +150,12 @@
 
     function LoginPage() {
       const [email, setEmail] = useState("");
+      const [phone, setPhone] = useState("");
       const [password, setPassword] = useState("");
       const [reEnterPassword, setReEnterPassword] = useState("");
       const [isLoading, setIsLoading] = useState(false);
       const [isRegister, setIsRegister] = useState(false);
+      const [loginMethod, setLoginMethod] = useState("email"); // "email" or "phone"
       const navigate = useNavigate();
 
       const handleLogin = async (e) => {
@@ -160,10 +163,17 @@
         setIsLoading(true);
 
         try {
-          const res = await fetch("http://localhost:5000/auth/login", {
+          const loginData = { password };
+          if (loginMethod === "email") {
+            loginData.email = email;
+          } else {
+            loginData.phone = phone;
+          }
+
+          const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/auth/login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password }),
+            body: JSON.stringify(loginData),
           });
           const data = await res.json();
 
@@ -196,11 +206,25 @@
           return;
         }
 
+        // Validate phone number if using phone method
+        if (loginMethod === "phone" && !/^[6-9]\d{9}$/.test(phone)) {
+          alert("Please enter a valid 10-digit phone number starting with 6-9.");
+          setIsLoading(false);
+          return;
+        }
+
         try {
-          const res = await fetch("http://localhost:5000/auth/register", {
+          const registerData = { password };
+          if (loginMethod === "email") {
+            registerData.email = email;
+          } else {
+            registerData.phone = phone;
+          }
+
+          const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/auth/register`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password }),
+            body: JSON.stringify(registerData),
           });
           const data = await res.json();
 
@@ -226,19 +250,13 @@
       const handleGoogleSuccess = async (credentialResponse) => {
         try {
           const tokenId = credentialResponse.credential;
-          const res = await fetch("http://localhost:5000/auth/google", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: tokenId }),
-          });
-          const data = await res.json();
+          
+          console.log('Attempting Google login...');
+          const data = await api.googleLogin(tokenId);
 
-          if (res.status !== 200) {
-            alert(data.error);
-            return;
-          }
-
+          console.log('Google login successful:', data);
           localStorage.setItem("token", data.token);
+          
           if (data.needsProfile) {
             navigate("/complete-profile");
           } else {
@@ -246,7 +264,11 @@
           }
         } catch (err) {
           console.error("Google login error:", err);
-          alert("Google login failed.");
+          if (err instanceof APIError) {
+            alert(`Google login failed: ${err.message}`);
+          } else {
+            alert("Google login failed. Please try again.");
+          }
         }
       };
 
@@ -285,19 +307,63 @@
 
                   <div className="space-y-6 p-6 pt-0">
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          <i className="fas fa-envelope mr-2"></i>Email Address
-                        </label>
-                        <input
-                          type="email"
-                          placeholder="Enter your email"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          className="w-full h-12 px-4 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-colors"
-                          required
-                        />
+                      {/* Login Method Toggle */}
+                      <div className="flex bg-gray-100 rounded-lg p-1">
+                        <button
+                          type="button"
+                          onClick={() => setLoginMethod("email")}
+                          className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all ${
+                            loginMethod === "email"
+                              ? "bg-white text-blue-600 shadow-sm"
+                              : "text-gray-500 hover:text-gray-700"
+                          }`}
+                        >
+                          <i className="fas fa-envelope mr-2"></i>Email
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLoginMethod("phone")}
+                          className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all ${
+                            loginMethod === "phone"
+                              ? "bg-white text-blue-600 shadow-sm"
+                              : "text-gray-500 hover:text-gray-700"
+                          }`}
+                        >
+                          <i className="fas fa-phone mr-2"></i>Phone
+                        </button>
                       </div>
+
+                      {/* Email or Phone Input */}
+                      {loginMethod === "email" ? (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <i className="fas fa-envelope mr-2"></i>Email Address
+                          </label>
+                          <input
+                            type="email"
+                            placeholder="Enter your email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full h-12 px-4 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-colors"
+                            required
+                          />
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <i className="fas fa-phone mr-2"></i>Phone Number
+                          </label>
+                          <input
+                            type="tel"
+                            placeholder="Enter 10-digit phone number"
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value)}
+                            maxLength="10"
+                            className="w-full h-12 px-4 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-colors"
+                            required
+                          />
+                        </div>
+                      )}
 
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -421,19 +487,63 @@
 
           <div className="space-y-4 p-6 pt-0">
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  <i className="fas fa-envelope mr-2"></i>Email Address
-                </label>
-                <input
-                  type="email"
-                  placeholder="Enter your email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full h-11 px-3 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-colors"
-                  required
-                />
+              {/* Login Method Toggle - Mobile */}
+              <div className="flex bg-gray-100 rounded-lg p-1">
+                <button
+                  type="button"
+                  onClick={() => setLoginMethod("email")}
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all ${
+                    loginMethod === "email"
+                      ? "bg-white text-blue-600 shadow-sm"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  <i className="fas fa-envelope mr-1"></i>Email
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLoginMethod("phone")}
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all ${
+                    loginMethod === "phone"
+                      ? "bg-white text-blue-600 shadow-sm"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  <i className="fas fa-phone mr-1"></i>Phone
+                </button>
               </div>
+
+              {/* Email or Phone Input - Mobile */}
+              {loginMethod === "email" ? (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <i className="fas fa-envelope mr-2"></i>Email Address
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="Enter your email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full h-11 px-3 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-colors"
+                    required
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <i className="fas fa-phone mr-2"></i>Phone Number
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="Enter 10-digit phone number"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    maxLength="10"
+                    className="w-full h-11 px-3 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-colors"
+                    required
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">

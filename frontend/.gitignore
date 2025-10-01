@@ -1,3 +1,7 @@
+# =====================================================
+# React Frontend - Deployment Ready  
+# =====================================================
+
 # Logs
 logs
 *.log
@@ -7,10 +11,35 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies
 node_modules
+/.pnp
+.pnp.js
+
+# Production builds
 dist
 dist-ssr
+build
+/.next/
+/out/
+
+# Environment variables (CRITICAL - Protect API keys!)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.production
+!.env.example
 *.local
+
+# Cache and temporary
+.eslintcache
+.stylelintcache
+.parcel-cache
+/coverage
+tmp/
+temp/
 
 # Editor directories and files
 .vscode/*
@@ -22,3 +51,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# OS generated files
+Thumbs.db
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db

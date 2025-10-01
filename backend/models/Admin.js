@@ -1,37 +1,71 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
-const AdminSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  adminId: { type: String, required: true, unique: true }, // Unique admin ID for login
-  password: { type: String, required: true },
-
-  // City assignment
-  assignedCity: { type: String, required: true }, // e.g., "Mumbai", "Delhi", "Bangalore"
-  assignedState: { type: String, required: true }, // e.g., "Maharashtra", "Delhi", "Karnataka"
-
-  // Admin role and permissions
-  role: { type: String, default: "city_admin" },
-  isActive: { type: Boolean, default: true },
-
-  // Optional: Geographic boundaries for more precise assignment
-  cityBounds: {
-    northeast: {
-      lat: Number,
-      lng: Number,
+const adminSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
     },
-    southwest: {
-      lat: Number,
-      lng: Number,
+    adminId: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+    },
+    password: {
+      type: String,
+      required: true,
+      minlength: 6,
+    },
+    assignedCity: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    assignedState: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      match: [
+        /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
+        "Please enter a valid email",
+      ],
+    },
+    contactNumber: {
+      type: String,
+      required: true,
+      match: [/^\d{10}$/, "Please enter a valid 10-digit phone number"],
+    },
+    officeAddress: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    role: {
+      type: String,
+      default: "admin",
+      enum: ["admin", "super_admin"],
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
     },
   },
-
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
-});
+  {
+    timestamps: true,
+  }
+);
 
 // Hash password before saving
-AdminSchema.pre("save", async function (next) {
+adminSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
 
   try {
@@ -44,18 +78,15 @@ AdminSchema.pre("save", async function (next) {
 });
 
 // Compare password method
-AdminSchema.methods.comparePassword = async function (candidatePassword) {
-  return bcrypt.compare(candidatePassword, this.password);
+adminSchema.methods.comparePassword = async function (candidatePassword) {
+  return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Update timestamp on save
-AdminSchema.pre("save", function (next) {
-  this.updatedAt = new Date();
-  next();
-});
+// Hide sensitive data when converting to JSON
+adminSchema.methods.toJSON = function () {
+  const admin = this.toObject();
+  delete admin.password;
+  return admin;
+};
 
-// Index for efficient city-based queries
-AdminSchema.index({ assignedCity: 1, assignedState: 1 });
-AdminSchema.index({ adminId: 1 });
-
-module.exports = mongoose.model("Admin", AdminSchema);
+module.exports = mongoose.model("Admin", adminSchema);

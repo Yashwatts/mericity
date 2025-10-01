@@ -1,5 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { Wrapper, Status } from "@googlemaps/react-wrapper";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faMapMarkerAlt } from "@fortawesome/free-solid-svg-icons";
 
 const render = (status) => {
   switch (status) {
@@ -158,7 +160,7 @@ const GoogleMap = ({ location, onLocationChange, isDraggable = false }) => {
         border: "1px solid #ddd",
         borderRadius: "8px"
       }}>
-        <p>📍 Getting your location...</p>
+        <p><FontAwesomeIcon icon={faMapMarkerAlt} className="text-blue-600" /> Getting your location...</p>
       </div>
     );
   }

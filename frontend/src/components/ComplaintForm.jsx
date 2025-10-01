@@ -7,7 +7,6 @@ import {
   faMicrophone,
   faPhone,
   faBolt,
-  faComments,
   faPaperPlane,
   faFileUpload,
   faCamera,
@@ -15,37 +14,71 @@ import {
   faStop,
   faCircle,
   faLocationArrow,
-  faSync
+  faSync,
+  faRobot,
+  faSpinner,
+  faSearch,
+  faCheck
 } from '@fortawesome/free-solid-svg-icons';
 import GoogleMap from "./GoogleMap";
 
 function ComplaintForm({ token, setComplaints, onClose }) {
+  // Basic form states
   const [desc, setDesc] = useState("");
   const [location, setLocation] = useState({ lat: "", lon: "" });
   const [image, setImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [phone, setPhone] = useState("");
-  const [priority, setPriority] = useState("Medium");
-  const [reason, setReason] = useState("");
   const [isLocationLoading, setIsLocationLoading] = useState(true);
   const [audio, setAudio] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [audioPreview, setAudioPreview] = useState(null);
   const [recordingTime, setRecordingTime] = useState(0);
+
+  // AI/OCR states - NO automatic analysis
+  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState(null);
+  const [extractedText, setExtractedText] = useState("");
+  const [ocrError, setOcrError] = useState(null);
+
+  // Priority calculation states
+  const [priorityInfo, setPriorityInfo] = useState(null);
+  const [isCalculatingPriority, setIsCalculatingPriority] = useState(false);
+  const [priorityError, setPriorityError] = useState(null);
+
+  // Location search states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchSuggestions, setSearchSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Submit state
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitSuccess, setIsSubmitSuccess] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successData, setSuccessData] = useState(null);
+  
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
   const audioInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const recordingIntervalRef = useRef(null);
+  const searchContainerRef = useRef(null);
 
   // Fetch phone from profile
   useEffect(() => {
-    fetch("http://localhost:5000/user/me", {
+    fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/user/me`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-      .then(res => res.json())
-      .then(data => setPhone(data.phone || ""));
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        return res.json();
+      })
+      .then(data => setPhone(data.phone || ""))
+      .catch(error => {
+        console.error("Error fetching user phone:", error);
+      });
   }, [token]);
 
   // Get live location
@@ -69,23 +102,121 @@ function ComplaintForm({ token, setComplaints, onClose }) {
     }
   }, []);
 
-  // Handle image selection and preview
+  // Handle clicking outside search suggestions to close them
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target)) {
+        setShowSuggestions(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Manual Gemini Vision AI analysis - ONLY when button clicked
+  const analyzeImageWithGeminiVision = async () => {
+    if (!image) {
+      alert('Please upload an image first');
+      return;
+    }
+
+    setIsAnalyzingImage(true);
+    setOcrError(null);
+    setAiSuggestion(null);
+    setExtractedText("");
+
+    try {
+      const formData = new FormData();
+      formData.append('image', image);
+
+      console.log('🔍 Calling Gemini Vision API:', `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/api/vision-ocr`);
+      console.log('📁 Image file:', image.name, image.size);
+
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/api/vision-ocr`, {
+        method: 'POST',
+        body: formData
+      });
+
+      console.log('📡 Response status:', response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API error: ${response.status} - ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log(result);
+
+      if (result.success) {
+        setExtractedText(result.extractedText || "");
+        setAiSuggestion(result.suggestion);
+        
+        // Automatically fill description with AI-generated description
+        if (result.suggestion) {
+          setDesc(result.suggestion);
+        }
+        
+        // Clear any previous errors on success
+        setOcrError(null);
+        
+        // Only show error if the method indicates a real failure
+        if (result.method === 'fallback-analysis' && result.error) {
+          // Don't show error for successful fallback, just log it
+          console.warn('AI fell back to generic description:', result.error);
+        }
+      } else {
+        throw new Error(result.error || 'AI Vision analysis failed');
+      }
+
+    } catch (error) {
+      console.error('❌ Gemini Vision Error:', error);
+      setOcrError(error.message);
+      
+      // Enhanced fallback - try to provide better suggestions based on common civic issues
+      const civicSuggestions = [
+        "Infrastructure maintenance issue requiring attention - visible damage or deterioration affecting public safety and accessibility",
+        "Public facility concern identified - cleanliness, functionality, or safety standards not meeting community requirements", 
+        "Municipal service disruption detected - essential services or utilities experiencing operational deficiencies",
+        "Street infrastructure problem observed - road surface, signage, or lighting systems requiring maintenance intervention",
+        "Community safety concern identified - structural, environmental, or accessibility hazards requiring immediate attention"
+      ];
+      
+      // Use a random suggestion instead of the same generic message
+      const randomSuggestion = civicSuggestions[Math.floor(Math.random() * civicSuggestions.length)];
+      
+      setDesc(randomSuggestion);
+      setAiSuggestion(randomSuggestion); // Also set as AI suggestion for visual feedback
+    } finally {
+      setIsAnalyzingImage(false);
+    }
+  };
+
+  // Handle image selection - NO automatic analysis
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
       setImage(file);
       const reader = new FileReader();
-      reader.onload = (e) => {
-        setImagePreview(e.target.result);
-      };
+      reader.onload = (e) => setImagePreview(e.target.result);
       reader.readAsDataURL(file);
+      
+      // Clear previous AI results when new image is uploaded
+      setAiSuggestion(null);
+      setExtractedText("");
+      setOcrError(null);
     }
   };
 
-  // Clear image selection
+  // Clear image and reset AI states
   const clearImage = () => {
     setImage(null);
     setImagePreview(null);
+    setAiSuggestion(null);
+    setExtractedText("");
+    setOcrError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (cameraInputRef.current) cameraInputRef.current.value = "";
   };
@@ -161,7 +292,58 @@ function ComplaintForm({ token, setComplaints, onClose }) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Calculate priority for preview
+  const calculatePriority = async () => {
+    if (!location.lat || !location.lon) {
+      alert("Location is required for priority calculation. Please select a location on the map or enable location access.");
+      return;
+    }
+
+    setIsCalculatingPriority(true);
+    setPriorityError(null);
+    setPriorityInfo(null);
+
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/complaints/calculate-priority`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          lat: location.lat,
+          lon: location.lon,
+          issueType: 'general',
+          category: 'civic'
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setPriorityInfo(data);
+      } else {
+        throw new Error(data.error || 'Priority calculation failed');
+      }
+      
+    } catch (error) {
+      console.error("Priority calculation error:", error);
+      setPriorityError(error.message);
+    } finally {
+      setIsCalculatingPriority(false);
+    }
+  };
+
   const handleSubmit = async () => {
+    // Prevent multiple submissions
+    if (isSubmitting) {
+      return;
+    }
+
     // Validate required fields
     if (!desc.trim()) {
       alert("Please enter a description");
@@ -183,55 +365,103 @@ function ComplaintForm({ token, setComplaints, onClose }) {
       return;
     }
 
+    setIsSubmitting(true);
+
     const formData = new FormData();
     formData.append("description", desc);
     formData.append("lat", location.lat);
     formData.append("lon", location.lon);
     formData.append("phone", phone);
-    formData.append("priority", priority);
-    formData.append("reason", reason);
+
+    // Add AI analysis results if available
+    if (extractedText) {
+      formData.append("extractedText", extractedText);
+    }
+    if (aiSuggestion) {
+      formData.append("aiAnalysis", aiSuggestion);
+    }
 
     if (image) formData.append("image", image);
     if (audio) formData.append("audio", audio);
 
     try {
-      const res = await fetch("http://localhost:5000/complaints", {
+      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/complaints`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData
       });
 
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+
       const data = await res.json();
       setComplaints((prev) => [data.complaint, ...prev]);
 
-      // Reset fields
-      setDesc("");
-      setImage(null);
-      setImagePreview(null);
-      setAudio(null);
-      setAudioPreview(null);
-      setRecordingTime(0);
-      setReason("");
+      // Show success animation
+      setIsSubmitSuccess(true);
       
-      // Clear file inputs
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      if (cameraInputRef.current) cameraInputRef.current.value = "";
-      if (audioInputRef.current) audioInputRef.current.value = "";
-
-      alert("Complaint submitted successfully!");
+      // Prepare success data
+      const complaintData = {
+        id: data.complaint._id,
+        description: desc,
+        location: {
+          lat: location.lat,
+          lon: location.lon
+        },
+        phone: phone,
+        priority: priorityInfo,
+        aiAnalysis: aiSuggestion,
+        extractedText: extractedText,
+        timestamp: new Date().toLocaleString()
+      };
       
-      // Close modal if onClose function is provided
-      if (onClose) {
-        onClose();
-      }
+      // Show success modal after a brief delay
+      setTimeout(() => {
+        setSuccessData(complaintData);
+        setShowSuccessModal(true);
+        
+        // Reset all form fields
+        setDesc("");
+        setImage(null);
+        setImagePreview(null);
+        setAudio(null);
+        setAudioPreview(null);
+        setRecordingTime(0);
+        setPriorityInfo(null);
+        setPriorityError(null);
+        setAiSuggestion(null);
+        setExtractedText("");
+        setOcrError(null);
+        
+        // Clear file inputs
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        if (cameraInputRef.current) cameraInputRef.current.value = "";
+        if (audioInputRef.current) audioInputRef.current.value = "";
+        
+        // Reset success animation
+        setIsSubmitSuccess(false);
+        setIsSubmitting(false); // Reset submitting state here too
+      }, 1500); // Show success animation for 1.5 seconds
     } catch (error) {
       console.error("Error submitting complaint:", error);
       alert("Error submitting complaint. Please try again.");
+      setIsSubmitting(false); // Reset submitting state on error
+    }
+  };
+
+  const handleCloseModal = () => {
+    setShowSuccessModal(false);
+    setSuccessData(null);
+    if (onClose) {
+      onClose();
     }
   };
 
   const handleLocationUpdate = (newLocation) => {
     setLocation(newLocation);
+    setPriorityInfo(null);
+    setPriorityError(null);
   };
 
   const getCurrentLocation = () => {
@@ -243,6 +473,8 @@ function ComplaintForm({ token, setComplaints, onClose }) {
             lat: pos.coords.latitude,
             lon: pos.coords.longitude,
           });
+          setPriorityInfo(null);
+          setPriorityError(null);
           setIsLocationLoading(false);
         },
         (error) => {
@@ -252,6 +484,69 @@ function ComplaintForm({ token, setComplaints, onClose }) {
         }
       );
     }
+  };
+
+  // Location search functions
+  const handleLocationSearch = async (query) => {
+    if (!query.trim()) {
+      setSearchSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/complaints/geocode?address=${encodeURIComponent(query)}`);
+      const data = await response.json();
+
+      if (data.success && data.results && data.results.length > 0) {
+        const suggestions = data.results.slice(0, 5).map(result => ({
+          address: result.formatted_address,
+          lat: result.geometry.location.lat,
+          lng: result.geometry.location.lng
+        }));
+        setSearchSuggestions(suggestions);
+        setShowSuggestions(true);
+      } else {
+        setSearchSuggestions([]);
+        setShowSuggestions(false);
+      }
+    } catch (error) {
+      console.error("Error searching location:", error);
+      setSearchSuggestions([]);
+      setShowSuggestions(false);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleSuggestionSelect = (suggestion) => {
+    setLocation({
+      lat: suggestion.lat,
+      lon: suggestion.lng
+    });
+    setSearchQuery(suggestion.address);
+    setShowSuggestions(false);
+    setPriorityInfo(null);
+    setPriorityError(null);
+  };
+
+  const handleSearchInputChange = (e) => {
+    const value = e.target.value;
+    setSearchQuery(value);
+    
+    // Debounce search
+    if (window.searchTimeout) {
+      clearTimeout(window.searchTimeout);
+    }
+    
+    window.searchTimeout = setTimeout(() => {
+      handleLocationSearch(value);
+    }, 500);
+  };
+
+  const handleSearchButtonClick = () => {
+    handleLocationSearch(searchQuery);
   };
 
   return (
@@ -266,6 +561,10 @@ function ComplaintForm({ token, setComplaints, onClose }) {
             0% { transform: scale(1); }
             50% { transform: scale(1.05); }
             100% { transform: scale(1); }
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
           }
           .form-section {
             background: #ffffff;
@@ -338,19 +637,233 @@ function ComplaintForm({ token, setComplaints, onClose }) {
           .button-secondary:hover:not(:disabled) {
             background: #e5e7eb;
           }
+          .ai-predict-button {
+            background: linear-gradient(45deg, #60a5fa, #3b82f6);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .ai-predict-button:hover:not(:disabled) {
+            background: linear-gradient(45deg, #3b82f6, #2563eb);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+          }
+          .ai-predict-button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+          }
+          .ai-success-card {
+            background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+            border: 2px solid #bbf7d0;
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 12px;
+            position: relative;
+            overflow: hidden;
+          }
+          .ai-success-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #10b981, #059669);
+          }
+          .location-search-container {
+            position: relative;
+          }
+          .location-suggestions {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            z-index: 1000;
+            max-height: 200px;
+            overflow-y: auto;
+          }
+          .suggestion-item {
+            padding: 12px 16px;
+            cursor: pointer;
+            border-bottom: 1px solid #f3f4f6;
+            transition: background-color 0.2s ease;
+          }
+          .suggestion-item:last-child {
+            border-bottom: none;
+          }
+          .suggestion-item:hover {
+            background-color: #f9fafb;
+          }
+
+          /* Loading animation for button */
+          @keyframes buttonPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+          }
+          
+          /* Success animation for button */
+          @keyframes successGlow {
+            0% { box-shadow: 0 0 5px rgba(16, 185, 129, 0.3); }
+            50% { box-shadow: 0 0 25px rgba(16, 185, 129, 0.6); }
+            100% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.4); }
+          }
+          
+          .button-submitting {
+            animation: buttonPulse 2s infinite ease-in-out;
+          }
+          
           .button-success {
-            background: #10b981;
+            animation: successGlow 1.5s ease-in-out;
+          }
+
+          /* Success Modal Styles */
+          .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            animation: fadeIn 0.3s ease-out;
+          }
+          
+          .modal-content {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+            animation: slideIn 0.3s ease-out;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+          }
+          
+          @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+          }
+          
+          @keyframes slideIn {
+            from { transform: translateY(-20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+          }
+          
+          .modal-header {
+            text-align: center;
+            margin-bottom: 20px;
+          }
+          
+          .modal-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #10b981;
+            margin: 12px 0;
+          }
+          
+          .modal-subtitle {
+            color: #6b7280;
+            font-size: 14px;
+          }
+          
+          .complaint-details {
+            background: #f9fafb;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 16px 0;
+          }
+          
+          .detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #e5e7eb;
+          }
+          
+          .detail-row:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+          }
+          
+          .detail-label {
+            font-weight: 600;
+            color: #374151;
+            margin-right: 12px;
+            min-width: 80px;
+          }
+          
+          .detail-value {
+            color: #6b7280;
+            text-align: right;
+            flex: 1;
+            word-break: break-word;
+          }
+          
+          .priority-badge {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+          }
+          
+          .priority-high {
+            background: #fee2e2;
+            color: #dc2626;
+          }
+          
+          .priority-medium {
+            background: #fef3c7;
+            color: #d97706;
+          }
+          
+          .priority-low {
+            background: #f3f4f6;
+            color: #6b7280;
+          }
+          
+          .modal-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+          }
+          
+          .close-modal-btn {
+            flex: 1;
+            padding: 12px 24px;
+            background: #3b82f6;
             color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s ease;
           }
-          .button-success:hover:not(:disabled) {
-            background: #059669;
-          }
-          .button-danger {
-            background: #ef4444;
-            color: white;
-          }
-          .button-danger:hover:not(:disabled) {
-            background: #dc2626;
+          
+          .close-modal-btn:hover {
+            background: #2563eb;
           }
         `}
       </style>
@@ -403,6 +916,48 @@ function ComplaintForm({ token, setComplaints, onClose }) {
             )}
           </div>
 
+          {/* Location Search Input */}
+          <div className="location-search-container" style={{ marginBottom: "16px" }} ref={searchContainerRef}>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <input
+                type="text"
+                placeholder="Search for a location (e.g., street name, landmark, city)"
+                value={searchQuery}
+                onChange={handleSearchInputChange}
+                className="input-field"
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                onClick={handleSearchButtonClick}
+                disabled={isSearching}
+                className="button button-secondary"
+                style={{ whiteSpace: "nowrap" }}
+              >
+                <FontAwesomeIcon icon={faSearch} />
+                {isSearching ? "Searching..." : "Search"}
+              </button>
+            </div>
+
+            {/* Search Suggestions Dropdown */}
+            {showSuggestions && searchSuggestions.length > 0 && (
+              <div className="location-suggestions">
+                {searchSuggestions.map((suggestion, index) => (
+                  <div
+                    key={index}
+                    onClick={() => handleSuggestionSelect(suggestion)}
+                    className="suggestion-item"
+                  >
+                    <div style={{ fontSize: "14px", color: "#374151" }}>
+                      <FontAwesomeIcon icon={faMapMarkerAlt} style={{ marginRight: "8px", color: "#6b7280" }} />
+                      {suggestion.address}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {isLocationLoading ? (
             <div style={{ 
               height: "300px", 
@@ -434,9 +989,7 @@ function ComplaintForm({ token, setComplaints, onClose }) {
                 fontSize: "13px",
                 color: "#1e40af"
               }}>
-                <strong>📍 Coordinates:</strong> {location.lat.toFixed(6)}, {location.lon.toFixed(6)}
-                <br />
-                <small style={{ color: "#6b7280" }}>💡 Drag the map to move around - the pin shows the center location</small>
+                <strong><FontAwesomeIcon icon={faMapMarkerAlt} /> Coordinates:</strong> {parseFloat(location.lat).toFixed(6)}, {parseFloat(location.lon).toFixed(6)}
               </div>
             </>
           ) : (
@@ -461,32 +1014,7 @@ function ComplaintForm({ token, setComplaints, onClose }) {
           )}
         </div>
 
-        {/* Description Section */}
-        <div className="form-section">
-          <div className="input-group">
-            <div className="input-label">
-              <FontAwesomeIcon icon={faEdit} style={{ color: "#3b82f6" }} />
-              <span>Description *</span>
-            </div>
-            <textarea
-              placeholder="Describe your complaint in detail. Include what happened, when it occurred, and any other relevant information..."
-              value={desc}
-              onChange={(e) => setDesc(e.target.value)}
-              className="input-field"
-              style={{
-                minHeight: "120px",
-                resize: "vertical",
-                fontFamily: "inherit"
-              }}
-              required
-            />
-            <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px" }}>
-              {desc.length}/500 characters
-            </div>
-          </div>
-        </div>
-
-        {/* Image Upload Section */}
+        {/* Simple Image Section - MOVED TO FIRST POSITION */}
         <div className="form-section">
           <div className="input-label">
             <FontAwesomeIcon icon={faImage} style={{ color: "#3b82f6" }} />
@@ -564,6 +1092,76 @@ function ComplaintForm({ token, setComplaints, onClose }) {
               />
             </div>
           )}
+        </div>
+
+        {/* Description Section with Manual AI Button */}
+        <div className="form-section">
+          <div className="input-group">
+            <div className="input-label">
+              <FontAwesomeIcon icon={faEdit} style={{ color: "#3b82f6" }} />
+              <span>Description *</span>
+            </div>
+            <textarea
+              placeholder="Describe your complaint in detail. Include what happened, when it occurred, and any other relevant information..."
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+              className="input-field"
+              style={{
+                minHeight: "120px",
+                resize: "vertical",
+                fontFamily: "inherit",
+                backgroundColor: aiSuggestion ? "#f0f9ff" : "#ffffff",
+                border: aiSuggestion ? "2px solid #bfdbfe" : "1px solid #d1d5db"
+              }}
+              required
+            />
+            <div style={{
+              fontSize: "12px",
+              color: "#6b7280",
+              marginTop: "4px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center"
+            }}>
+              <span>{desc.length}/1000 characters</span>
+              
+              {/* PREDICT WITH AI BUTTON */}
+              <button
+                type="button"
+                onClick={analyzeImageWithGeminiVision}
+                disabled={!image || isAnalyzingImage}
+                className="ai-predict-button"
+              >
+                {isAnalyzingImage ? (
+                  <>
+                    <FontAwesomeIcon icon={faSpinner} style={{animation: "spin 1s linear infinite"}} />
+                    Gemini Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <FontAwesomeIcon icon={faRobot} />
+                    Predict With AI
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* AI Error Display */}
+            {ocrError && (
+              <div style={{
+                padding: "12px",
+                backgroundColor: "#fee2e2",
+                border: "1px solid #fecaca",
+                borderRadius: "8px",
+                marginTop: "12px",
+                fontSize: "14px",
+                color: "#dc2626"
+              }}>
+                <FontAwesomeIcon icon={faRobot} style={{ marginRight: "8px" }} />
+                AI Analysis Error: {ocrError}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Voice Message Section */}
@@ -687,46 +1285,128 @@ function ComplaintForm({ token, setComplaints, onClose }) {
               onChange={(e) => setPhone(e.target.value)}
               className="input-field"
             />
-            <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px" }}>
-              📋 This will be fetched from your profile but you can edit it here
-            </div>
           </div>
         </div>
 
-        {/* Priority and Details */}
+        {/* Priority Calculation Section */}
         <div className="form-section">
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "20px" }}>
-            <div className="input-group">
-              <div className="input-label">
-                <FontAwesomeIcon icon={faBolt} style={{ color: "#f59e0b" }} />
-                <span>Priority Level</span>
-                <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "normal" }}>(Optional)</span>
-              </div>
-              <select 
-                value={priority} 
-                onChange={(e) => setPriority(e.target.value)}
-                className="input-field"
-                style={{ cursor: "pointer" }}
-              >
-                <option value="High">🔴 High Priority</option>
-                <option value="Medium">🟡 Medium Priority</option>
-                <option value="Low">🟢 Low Priority</option>
-              </select>
+          <div className="input-group">
+            <div className="input-label">
+              <FontAwesomeIcon icon={faBolt} style={{ color: "#10b981" }} />
+              <span>Priority Calculation</span>
             </div>
+            
+            <button
+              type="button"
+              onClick={calculatePriority}
+              disabled={!location.lat || !location.lon || isCalculatingPriority}
+              className="button"
+              style={{
+                width: "100%",
+                padding: "12px 20px",
+                marginBottom: "15px",
+                backgroundColor: (!location.lat || !location.lon || isCalculatingPriority) ? "#9ca3af" : "#10b981",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                fontSize: "14px",
+                fontWeight: "600",
+                cursor: (!location.lat || !location.lon || isCalculatingPriority) ? "not-allowed" : "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px"
+              }}
+            >
+              {isCalculatingPriority ? (
+                <>
+                  <FontAwesomeIcon icon={faSync} className="fa-spin" />
+                  Calculating Priority...
+                </>
+              ) : (
+                <>
+                  <FontAwesomeIcon icon={faBolt} />
+                  Calculate Priority for Map Location
+                </>
+              )}
+            </button>
 
-            <div className="input-group">
-              <div className="input-label">
-                <FontAwesomeIcon icon={faComments} style={{ color: "#3b82f6" }} />
-                <span>Reason for Priority</span>
-                <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "normal" }}>(Optional)</span>
+            {priorityInfo && (
+              <div style={{
+                padding: "16px",
+                backgroundColor: priorityInfo.priority === 'High' ? '#fee2e2' : priorityInfo.priority === 'Medium' ? '#fef3c7' : '#dcfce7',
+                border: `2px solid ${priorityInfo.color || (priorityInfo.priority === 'High' ? '#dc2626' : priorityInfo.priority === 'Medium' ? '#f59e0b' : '#10b981')}`,
+                borderRadius: "8px",
+                marginBottom: "10px"
+              }}>
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  marginBottom: "8px",
+                  fontSize: "16px",
+                  fontWeight: "600",
+                  color: priorityInfo.color || (priorityInfo.priority === 'High' ? '#dc2626' : priorityInfo.priority === 'Medium' ? '#f59e0b' : '#10b981')
+                }}>
+                  <span style={{ fontSize: "20px", marginRight: "8px" }}>
+                    {priorityInfo.icon || (priorityInfo.priority === 'High' ? '🚨' : priorityInfo.priority === 'Medium' ? '⚠️' : '📝')}
+                  </span>
+                  Priority: {priorityInfo.priority}
+                </div>
+                
+                <div style={{
+                  fontSize: "14px",
+                  color: "#374151",
+                  marginBottom: "8px",
+                  lineHeight: "1.4"
+                }}>
+                  <strong>Analysis:</strong> {priorityInfo.priorityReason || priorityInfo.message}
+                </div>
+                
+                {priorityInfo.areaName && (
+                  <div style={{
+                    fontSize: "12px",
+                    color: "#6b7280",
+                    marginBottom: "4px"
+                  }}>
+                    <strong>Area:</strong> {priorityInfo.areaName}
+                  </div>
+                )}
+                
+                {priorityInfo.highPriorityPlace && (
+                  <div style={{
+                    fontSize: "12px",
+                    color: "#6b7280",
+                    marginBottom: "4px"
+                  }}>
+                    <strong>Nearby Facility:</strong> {priorityInfo.highPriorityPlace}
+                  </div>
+                )}
+                
+                {priorityInfo.searchRadius && (
+                  <div style={{
+                    fontSize: "11px",
+                    color: "#9ca3af",
+                    fontStyle: "italic"
+                  }}>
+                    Search radius: {priorityInfo.searchRadius}m
+                  </div>
+                )}
               </div>
-              <input
-                placeholder="Explain why this priority level is appropriate..."
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                className="input-field"
-              />
-            </div>
+            )}
+
+            {priorityError && (
+              <div style={{
+                padding: "12px 16px",
+                backgroundColor: "#fee2e2",
+                border: "1px solid #fca5a5",
+                borderRadius: "8px",
+                fontSize: "14px",
+                color: "#dc2626",
+                marginBottom: "10px"
+              }}>
+                ❌ Priority calculation failed: {priorityError}
+              </div>
+            )}
           </div>
         </div>
 
@@ -734,22 +1414,54 @@ function ComplaintForm({ token, setComplaints, onClose }) {
         <div className="form-section">
           <button 
             onClick={handleSubmit}
-            disabled={!desc.trim() || (!location.lat || !location.lon) || !image || !phone.trim()}
-            className="button button-primary"
+            disabled={isSubmitting || !desc.trim() || (!location.lat || !location.lon) || !image || !phone.trim()}
+            className={`button button-primary ${isSubmitting ? 'button-submitting' : ''} ${isSubmitSuccess ? 'button-success' : ''}`}
             style={{
               width: "100%",
               padding: "16px 24px",
               fontSize: "16px",
               fontWeight: "600",
               justifyContent: "center",
-              backgroundColor: (!desc.trim() || (!location.lat || !location.lon) || !image || !phone.trim()) ? "#9ca3af" : "#3b82f6"
+              backgroundColor: isSubmitting ? "#9ca3af" : 
+                             (!desc.trim() || (!location.lat || !location.lon) || !image || !phone.trim()) ? "#9ca3af" : 
+                             "#3b82f6",
+              cursor: isSubmitting ? "not-allowed" : "pointer",
+              opacity: isSubmitting ? "0.7" : "1"
             }}
           >
-            <FontAwesomeIcon icon={faPaperPlane} />
-            Submit Complaint
+            {isSubmitting ? (
+              <>
+                <FontAwesomeIcon icon={faSpinner} style={{ animation: "spin 1s linear infinite", marginRight: "8px" }} />
+                Submitting...
+              </>
+            ) : (
+              <>
+                <FontAwesomeIcon icon={faPaperPlane} />
+                Submit Complaint
+              </>
+            )}
           </button>
         </div>
       </div>
+
+      {/* Success Modal */}
+      {showSuccessModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div className="success-checkmark">
+              <FontAwesomeIcon icon={faCheck} />
+            </div>
+            <h3>Complaint Submitted Successfully!</h3>
+            <p>Your complaint has been registered and will be reviewed by the relevant department.</p>
+            <button 
+              onClick={() => setShowSuccessModal(false)} 
+              className="modal-button"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

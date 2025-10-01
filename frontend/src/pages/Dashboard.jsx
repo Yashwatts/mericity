@@ -1,11 +1,18 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faMap } from "@fortawesome/free-solid-svg-icons";
 import ComplaintForm from "../components/ComplaintForm";
 import ExploreComplaints from "../components/ExploreComplaints";
+import CommunityComplaints from "../components/CommunityComplaints";
+import Janawaaz from "../components/Janawaaz";
+import Rewards from "../components/Rewards";
+import WarningNotification from "../components/WarningNotification";
+import { api, APIError } from "../utils/api";
 
 function Dashboard() {
   const [complaints, setComplaints] = useState([]);
-  const [activeTab, setActiveTab] = useState("open"); // open | closed | explore
+  const [activeTab, setActiveTab] = useState("open"); // open | closed | explore | community | janawaaz | rewards
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -21,6 +28,28 @@ function Dashboard() {
   const handleLogout = () => {
     localStorage.removeItem("token");
     navigate("/");
+  };
+
+  // Manual refresh function for testing
+  const handleManualRefresh = () => {
+    console.log('[DASHBOARD-MANUAL] Manual refresh triggered...');
+    setLoading(true);
+    api.getComplaints(token)
+      .then((data) => {
+        console.log('[DASHBOARD-MANUAL] Manual refresh - got data:', data.complaints?.length || 0, 'complaints');
+        if (data.complaints) {
+          const rejectedComplaints = data.complaints.filter(c => c.status === 'rejected');
+          console.log('[DASHBOARD-MANUAL] Manual refresh - rejected complaints:', rejectedComplaints.length);
+          console.log('[DASHBOARD-MANUAL] Manual refresh - warning-given complaints:', 
+            data.complaints.filter(c => c.status === 'rejected' && c.rejectionReason === 'Warning Given').length);
+        }
+        setComplaints(data.complaints || []);
+        setLoading(false);
+      })
+      .catch((error) => {
+        console.error("Error in manual refresh:", error);
+        setLoading(false);
+      });
   };
 
   // Redirect to login if no token
@@ -46,36 +75,39 @@ function Dashboard() {
 
   useEffect(() => {
     if (token) {
-      // Fetch complaints
-      fetch("http://localhost:5000/complaints", {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then((res) => res.json())
+      // Fetch complaints using API utility
+      api.getComplaints(token)
         .then((data) => {
-          // Handle the new response structure
-          console.log('API Response:', data);
-          console.log('Complaints data:', data.complaints);
+          console.log('[DASHBOARD-DEBUG] API Response:', data);
+          console.log('[DASHBOARD-DEBUG] Complaints data:', data.complaints);
+          console.log('[DASHBOARD-DEBUG] Number of complaints:', data.complaints?.length || 0);
           if (data.complaints && data.complaints.length > 0) {
-            console.log('First complaint audio data:', {
+            console.log('[DASHBOARD-DEBUG] First complaint audio data:', {
               audio: data.complaints[0].audio,
               audioUrl: data.complaints[0].audioUrl
             });
+            console.log('[DASHBOARD-DEBUG] All complaint statuses:', data.complaints.map(c => ({ id: c._id, status: c.status, rejectionReason: c.rejectionReason })));
+            console.log('[DASHBOARD-DEBUG] Rejected complaints:', data.complaints.filter(c => c.status === 'rejected'));
+            console.log('[DASHBOARD-DEBUG] Warning-given complaints:', data.complaints.filter(c => c.status === 'rejected' && c.rejectionReason === 'Warning Given'));
+          } else {
+            console.log('[DASHBOARD-DEBUG] No complaints found in response');
           }
           setComplaints(data.complaints || []);
           setLoading(false);
         })
         .catch((error) => {
           console.error("Error fetching complaints:", error);
-          setError("Failed to load complaints");
+          if (error instanceof APIError) {
+            setError(`Failed to load complaints: ${error.message}`);
+          } else {
+            setError("Failed to load complaints");
+          }
           setComplaints([]);
           setLoading(false);
         });
 
-      // Fetch user details
-      fetch("http://localhost:5000/user/profile", {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then((res) => res.json())
+      // Fetch user details using API utility
+      api.getUserProfile(token)
         .then((data) => {
           console.log('User profile API response:', data);
           if (data.user) {
@@ -87,13 +119,57 @@ function Dashboard() {
         })
         .catch((error) => {
           console.error("Error fetching user details:", error);
+          // Don't show error for user details as it's not critical
         });
     }
   }, [token]);
 
+  // Periodic refresh to catch status updates from admin actions
+  useEffect(() => {
+    if (!token) return;
+    
+    const refreshInterval = setInterval(() => {
+      console.log('[DASHBOARD-REFRESH] Refreshing complaints data...');
+      api.getComplaints(token)
+        .then((data) => {
+          console.log('[DASHBOARD-REFRESH] Refreshed data received:', data.complaints?.length || 0, 'complaints');
+          if (data.complaints) {
+            const rejectedComplaints = data.complaints.filter(c => c.status === 'rejected');
+            console.log('[DASHBOARD-REFRESH] Rejected complaints after refresh:', rejectedComplaints.length);
+            console.log('[DASHBOARD-REFRESH] Warning-given complaints after refresh:', 
+              data.complaints.filter(c => c.status === 'rejected' && c.rejectionReason === 'Warning Given').length);
+          }
+          setComplaints(data.complaints || []);
+        })
+        .catch((error) => {
+          console.error("Error refreshing complaints:", error);
+        });
+    }, 5000); // Refresh every 5 seconds for testing
+
+    return () => clearInterval(refreshInterval);
+  }, [token]);
+
   // Filter complaints by status (handle case where complaints might not be loaded yet)
-  const openComplaints = complaints.filter((c) => c && c.status === "pending");
-  const closedComplaints = complaints.filter((c) => c && (c.status === "resolved" || c.status === "closed"));
+  const openComplaints = complaints.filter((c) => c && (
+    c.status === "pending" || 
+    c.status === "in_progress" || 
+    c.status === "pending_verification" || 
+    c.status === "pending_manual_verification" ||
+    c.status === "phone_verified" ||
+    c.status === "pending_assignment"
+  ));
+  const closedComplaints = complaints.filter((c) => c && (
+    c.status === "resolved" || 
+    c.status === "closed" || 
+    c.status === "rejected" ||
+    c.status === "rejected_by_user" ||
+    c.status === "rejected_no_answer"
+  ));
+
+  // Debug closed complaints
+  console.log('[DASHBOARD-DEBUG] Total complaints:', complaints.length);
+  console.log('[DASHBOARD-DEBUG] Closed complaints count:', closedComplaints.length);
+  console.log('[DASHBOARD-DEBUG] Closed complaints:', closedComplaints.map(c => ({ id: c._id, status: c.status, rejectionReason: c.rejectionReason })));
 
   if (loading) {
     return (
@@ -114,150 +190,62 @@ function Dashboard() {
 
   return (
     <>
-      {/* Responsive CSS */}
-      <style>{`
-        @media (max-width: 768px) {
-          .mobile-responsive-grid {
-            grid-template-columns: 1fr !important;
-            gap: 8px !important;
-            padding: 0 8px !important;
-          }
-          .mobile-responsive-modal {
-            padding: 20px !important;
-            border-radius: 8px !important;
-            width: 100% !important;
-            max-height: 95vh !important;
-          }
-          .mobile-responsive-form-grid {
-            grid-template-columns: 1fr !important;
-            gap: 16px !important;
-          }
-        }
-        @media (max-width: 480px) {
-          .mobile-single-column {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
+      {/* Warning Notification Overlay */}
+      <WarningNotification />
       
-      <div style={{ display: "flex", minHeight: "100vh" }}>
+      <div className="flex min-h-screen bg-gray-50">
       {/* Mobile Sidebar Overlay */}
       {sidebarOpen && (
         <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.5)",
-            zIndex: 999,
-            display: window.innerWidth <= 768 ? "block" : "none"
-          }}
+          className="fixed inset-0 bg-black bg-opacity-50 z-[999] md:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
       
       {/* Sidebar */}
       <div
-        style={{
-          width: sidebarOpen ? "280px" : "0",
-          backgroundColor: "#ffffff",
-          color: "#202124",
-          transition: "width 0.3s ease, transform 0.3s ease",
-          overflow: "hidden",
-          position: "fixed",
-          height: "100vh",
-          zIndex: 1000,
-          borderRight: "1px solid #e8eaed",
-          boxShadow: sidebarOpen ? "0 2px 10px rgba(0,0,0,0.1)" : "none",
-          transform: window.innerWidth <= 768 && !sidebarOpen ? "translateX(-100%)" : "translateX(0)"
-        }}
+        className={`
+          fixed top-0 left-0 h-screen bg-white text-gray-800 z-[1000]
+          transition-all duration-300 ease-in-out overflow-hidden
+          border-r border-gray-200
+          ${sidebarOpen 
+            ? 'w-72 shadow-lg' 
+            : 'w-0'
+          }
+          ${!sidebarOpen ? 'md:transform-none transform -translate-x-full' : 'transform-none'}
+        `}
       >
-        <div style={{ padding: "24px 0", width: "280px" }}>
+        <div className="py-6 w-72">
           {/* Sidebar Header with Menu Button */}
-          <div style={{ 
-            padding: "0 16px 24px 16px", 
-            borderBottom: "1px solid #e8eaed",
-            marginBottom: "16px",
-            display: "flex",
-            alignItems: "center",
-            gap: "12px"
-          }}>
+          <div className="px-4 pb-6 border-b border-gray-200 mb-4 flex items-center gap-3">
             {/* Menu Button in Sidebar */}
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#5f6368",
-                cursor: "pointer",
-                padding: "8px",
-                borderRadius: "50%",
-                transition: "all 0.2s ease",
-                width: "32px",
-                height: "32px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center"
-              }}
-              onMouseOver={(e) => {
-                e.target.style.backgroundColor = "#f1f3f4";
-                e.target.style.color = "#202124";
-              }}
-              onMouseOut={(e) => {
-                e.target.style.backgroundColor = "transparent";
-                e.target.style.color = "#5f6368";
-              }}
+              className="bg-transparent border-none text-gray-500 cursor-pointer p-2 rounded-full 
+                         transition-all duration-200 w-8 h-8 flex items-center justify-center
+                         hover:bg-gray-100 hover:text-gray-800"
             >
-              <i className="fas fa-bars" style={{ fontSize: "16px" }}></i>
+              <i className="fas fa-bars text-sm"></i>
             </button>
-            <h2 style={{ 
-              margin: "0", 
-              color: "#202124", 
-              fontSize: "22px", 
-              fontWeight: "400",
-              letterSpacing: "-0.5px"
-            }}>
+            <h2 className="m-0 text-gray-800 text-xl font-normal tracking-tight">
               MeriCity
             </h2>
           </div>
           
           {/* Navigation Items */}
-          <div style={{ padding: "0 12px" }}>
+          <div className="px-3">
             <button
               onClick={() => setActiveTab("open")}
-              style={{
-                width: "100%",
-                padding: "12px 20px",
-                backgroundColor: activeTab === "open" ? "#e8f0fe" : "transparent",
-                color: activeTab === "open" ? "#1a73e8" : "#5f6368",
-                border: "none",
-                borderRadius: "8px",
-                cursor: "pointer",
-                textAlign: "left",
-                marginBottom: "4px",
-                fontSize: "14px",
-                fontWeight: activeTab === "open" ? "500" : "400",
-                transition: "all 0.2s ease",
-                display: "flex",
-                alignItems: "center",
-                gap: "12px"
-              }}
-              onMouseOver={(e) => {
-                if (activeTab !== "open") {
-                  e.target.style.backgroundColor = "#f1f3f4";
-                  e.target.style.color = "#202124";
+              className={`
+                w-full py-3 px-5 border-none rounded-lg cursor-pointer text-left mb-1 
+                text-sm transition-all duration-200 flex items-center gap-3
+                ${activeTab === "open" 
+                  ? 'bg-blue-50 text-blue-600 font-medium' 
+                  : 'bg-transparent text-gray-500 font-normal hover:bg-gray-100 hover:text-gray-800'
                 }
-              }}
-              onMouseOut={(e) => {
-                if (activeTab !== "open") {
-                  e.target.style.backgroundColor = "transparent";
-                  e.target.style.color = "#5f6368";
-                }
-              }}
+              `}
             >
-              <i className="fas fa-folder-open" style={{ fontSize: "16px" }}></i>
+              <i className="fas fa-folder-open text-base"></i>
               <span>Open Complaints</span>
             </button>
             
@@ -297,6 +285,39 @@ function Dashboard() {
               <span>Closed Complaints</span>
             </button>
             
+            {/* Manual Refresh Button for Testing */}
+            <button
+              onClick={handleManualRefresh}
+              style={{
+                width: "100%",
+                padding: "8px 20px",
+                backgroundColor: "#f8f9fa",
+                color: "#28a745",
+                border: "1px solid #28a745",
+                borderRadius: "6px",
+                cursor: "pointer",
+                textAlign: "left",
+                marginBottom: "8px",
+                fontSize: "12px",
+                fontWeight: "500",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                transition: "all 0.2s ease"
+              }}
+              onMouseOver={(e) => {
+                e.target.style.backgroundColor = "#28a745";
+                e.target.style.color = "white";
+              }}
+              onMouseOut={(e) => {
+                e.target.style.backgroundColor = "#f8f9fa";
+                e.target.style.color = "#28a745";
+              }}
+            >
+              <i className="fas fa-sync-alt" style={{ fontSize: "12px" }}></i>
+              <span>Refresh Data</span>
+            </button>
+            
             <button
               onClick={() => setActiveTab("explore")}
               style={{
@@ -331,6 +352,114 @@ function Dashboard() {
             >
               <i className="fas fa-map-marked-alt" style={{ fontSize: "16px" }}></i>
               <span>Explore Map</span>
+            </button>
+            
+            <button
+              onClick={() => setActiveTab("community")}
+              style={{
+                width: "100%",
+                padding: "12px 20px",
+                backgroundColor: activeTab === "community" ? "#e8f0fe" : "transparent",
+                color: activeTab === "community" ? "#1a73e8" : "#5f6368",
+                border: "none",
+                borderRadius: "8px",
+                cursor: "pointer",
+                textAlign: "left",
+                marginBottom: "4px",
+                fontSize: "14px",
+                fontWeight: activeTab === "community" ? "500" : "400",
+                transition: "all 0.2s ease",
+                display: "flex",
+                alignItems: "center",
+                gap: "12px"
+              }}
+              onMouseOver={(e) => {
+                if (activeTab !== "community") {
+                  e.target.style.backgroundColor = "#f1f3f4";
+                  e.target.style.color = "#202124";
+                }
+              }}
+              onMouseOut={(e) => {
+                if (activeTab !== "community") {
+                  e.target.style.backgroundColor = "transparent";
+                  e.target.style.color = "#5f6368";
+                }
+              }}
+            >
+              <i className="fas fa-users" style={{ fontSize: "16px" }}></i>
+              <span>Community</span>
+            </button>
+            
+            <button
+              onClick={() => setActiveTab("janawaaz")}
+              style={{
+                width: "100%",
+                padding: "12px 20px",
+                backgroundColor: activeTab === "janawaaz" ? "#fef7e0" : "transparent",
+                color: activeTab === "janawaaz" ? "#f57f17" : "#5f6368",
+                border: "none",
+                borderRadius: "8px",
+                cursor: "pointer",
+                textAlign: "left",
+                marginBottom: "4px",
+                fontSize: "14px",
+                fontWeight: activeTab === "janawaaz" ? "500" : "400",
+                transition: "all 0.2s ease",
+                display: "flex",
+                alignItems: "center",
+                gap: "12px"
+              }}
+              onMouseOver={(e) => {
+                if (activeTab !== "janawaaz") {
+                  e.target.style.backgroundColor = "#f1f3f4";
+                  e.target.style.color = "#202124";
+                }
+              }}
+              onMouseOut={(e) => {
+                if (activeTab !== "janawaaz") {
+                  e.target.style.backgroundColor = "transparent";
+                  e.target.style.color = "#5f6368";
+                }
+              }}
+            >
+              <i className="fas fa-trophy" style={{ fontSize: "16px" }}></i>
+              <span>Janawaaz</span>
+            </button>
+            
+            <button
+              onClick={() => setActiveTab("rewards")}
+              style={{
+                width: "100%",
+                padding: "12px 20px",
+                backgroundColor: activeTab === "rewards" ? "#fef7e0" : "transparent",
+                color: activeTab === "rewards" ? "#f57f17" : "#5f6368",
+                border: "none",
+                borderRadius: "8px",
+                cursor: "pointer",
+                textAlign: "left",
+                marginBottom: "4px",
+                fontSize: "14px",
+                fontWeight: activeTab === "rewards" ? "500" : "400",
+                transition: "all 0.2s ease",
+                display: "flex",
+                alignItems: "center",
+                gap: "12px"
+              }}
+              onMouseOver={(e) => {
+                if (activeTab !== "rewards") {
+                  e.target.style.backgroundColor = "#f1f3f4";
+                  e.target.style.color = "#202124";
+                }
+              }}
+              onMouseOut={(e) => {
+                if (activeTab !== "rewards") {
+                  e.target.style.backgroundColor = "transparent";
+                  e.target.style.color = "#5f6368";
+                }
+              }}
+            >
+              <i className="fas fa-gift" style={{ fontSize: "16px" }}></i>
+              <span>Rewards</span>
             </button>
           </div>
           
@@ -609,115 +738,269 @@ function Dashboard() {
                   gridTemplateColumns: window.innerWidth <= 480 
                     ? "1fr" 
                     : window.innerWidth <= 768 
-                      ? "repeat(auto-fill, minmax(250px, 1fr))"
-                      : "repeat(auto-fill, minmax(280px, 1fr))", 
-                  gap: window.innerWidth <= 768 ? "8px" : "12px", 
+                      ? "repeat(auto-fill, minmax(280px, 1fr))"
+                      : "repeat(auto-fill, minmax(320px, 1fr))", 
+                  gap: window.innerWidth <= 768 ? "12px" : "16px", 
                   maxWidth: "1600px", 
                   margin: "0 auto", 
-                  padding: window.innerWidth <= 768 ? "0 8px" : "0 20px"
+                  padding: window.innerWidth <= 768 ? "0 12px" : "0 20px"
                 }}>
                   {openComplaints.map((c) => (
-                    <div key={c._id} style={{ 
-                      backgroundColor: "white",
-                      borderRadius: "8px", 
-                      padding: "16px", 
-                      boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
+                    <div key={c._id} className="complaint-card" style={{ 
+                      backgroundColor: "#ffffff",
+                      borderRadius: "12px", 
+                      overflow: "hidden",
+                      boxShadow: "0 2px 8px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.06)",
                       border: "1px solid #e8eaed",
-                      transition: "all 0.3s ease",
-                      cursor: "pointer"
+                      cursor: "pointer",
+                      position: "relative"
                     }}
                     onClick={() => setSelectedComplaint(c)}
                     onMouseOver={(e) => {
-                      e.currentTarget.style.transform = "translateY(-2px)";
-                      e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15), 0 8px 24px rgba(0,0,0,0.1)";
+                      e.currentTarget.style.transform = "translateY(-4px) scale(1.02)";
+                      e.currentTarget.style.boxShadow = "0 8px 25px rgba(0,0,0,0.15), 0 3px 10px rgba(0,0,0,0.1)";
+                      e.currentTarget.style.borderColor = "#1a73e8";
                     }}
                     onMouseOut={(e) => {
-                      e.currentTarget.style.transform = "translateY(0)";
-                      e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.1), 0 4px 16px rgba(0,0,0,0.05)";
+                      e.currentTarget.style.transform = "translateY(0) scale(1)";
+                      e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.06)";
+                      e.currentTarget.style.borderColor = "#e8eaed";
                     }}
                     >
-                      {/* Card Header */}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-                        <span style={{
-                          backgroundColor: c.status === "pending" ? "#fff3cd" : "#d1ecf1",
-                          color: c.status === "pending" ? "#856404" : "#0c5460",
-                          padding: "2px 8px",
-                          borderRadius: "12px",
-                          fontSize: "10px",
-                          fontWeight: "600",
-                          textTransform: "uppercase"
-                        }}>
-                          {c.status}
-                        </span>
-                        <span style={{ 
-                          fontSize: "11px", 
-                          color: "#5f6368"
-                        }}>
-                          {new Date(c.createdAt).toLocaleDateString('en-US', { 
-                            month: 'short', 
-                            day: 'numeric'
-                          })}
-                        </span>
-                      </div>
-
-                      {/* Image */}
-                      {c.imageUrl && (
-                        <div style={{ marginBottom: "10px" }}>
+                      {/* Card Image - Always at top */}
+                      {c.imageUrl ? (
+                        <div style={{ position: "relative" }}>
                           <img 
                             src={c.imageUrl} 
                             alt="Complaint" 
                             style={{ 
                               width: "100%", 
-                              height: "100px", 
-                              objectFit: "cover", 
-                              borderRadius: "4px",
-                              border: "1px solid #e8eaed"
+                              height: "180px", 
+                              objectFit: "cover",
+                              display: "block"
                             }}
                           />
+                          {/* Status overlay on image */}
+                          <div style={{
+                            position: "absolute",
+                            top: "12px",
+                            left: "12px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            backgroundColor: "rgba(255, 255, 255, 0.95)",
+                            backdropFilter: "blur(8px)",
+                            padding: "6px 12px",
+                            borderRadius: "20px",
+                            boxShadow: "0 2px 8px rgba(0,0,0,0.15)"
+                          }}>
+                            <i className={`fas ${c.status === "pending" ? "fa-clock" : 
+                                            c.status === "in_progress" ? "fa-sync-alt" :
+                                            c.status === "resolved" ? "fa-check-circle" :
+                                            c.status === "rejected" && c.rejectionReason === "Warning Given" ? "fa-exclamation-triangle" :
+                                            c.status === "rejected" ? "fa-times-circle" : "fa-question-circle"}`} style={{
+                              fontSize: "12px",
+                              color: c.status === "pending" ? "#f57c00" : 
+                                     c.status === "in_progress" ? "#1976d2" :
+                                     c.status === "resolved" ? "#4caf50" :
+                                     c.status === "rejected" && c.rejectionReason === "Warning Given" ? "#ff9800" :
+                                     c.status === "rejected" ? "#f44336" : "#757575",
+                              animation: c.status === "in_progress" ? "spin 2s linear infinite" : "none"
+                            }}></i>
+                            <span style={{
+                              color: c.status === "pending" ? "#f57c00" : 
+                                     c.status === "in_progress" ? "#1976d2" :
+                                     c.status === "resolved" ? "#4caf50" :
+                                     c.status === "rejected" && c.rejectionReason === "Warning Given" ? "#ff9800" :
+                                     c.status === "rejected" ? "#f44336" : "#757575",
+                              fontSize: "11px",
+                              fontWeight: "600",
+                              textTransform: "uppercase",
+                              letterSpacing: "0.5px"
+                            }}>
+                              {c.status === "pending" ? "PENDING" :
+                               c.status === "in_progress" ? "IN PROGRESS" :
+                               c.status === "resolved" ? "RESOLVED" :
+                               c.status === "rejected" && c.rejectionReason === "Warning Given" ? "WARNING GIVEN" :
+                               c.status === "rejected" ? "REJECTED" : c.status.toUpperCase()}
+                            </span>
+                          </div>
+                          {/* Priority badge on image */}
+                          {c.priority && (
+                            <div className={c.priority === "High" ? "priority-high" : ""} style={{
+                              position: "absolute",
+                              top: "12px",
+                              right: "12px",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              backgroundColor: c.priority === "High" ? "rgba(244, 67, 54, 0.95)" : 
+                                             c.priority === "Medium" ? "rgba(255, 152, 0, 0.95)" : "rgba(76, 175, 80, 0.95)",
+                              color: "white",
+                              padding: "4px 8px",
+                              borderRadius: "12px",
+                              boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
+                              fontWeight: "600"
+                            }}>
+                              <i className={`fas ${c.priority === "High" ? "fa-exclamation-triangle" : 
+                                                  c.priority === "Medium" ? "fa-exclamation-circle" : 
+                                                  "fa-info-circle"}`} style={{ fontSize: "10px" }}></i>
+                              <span style={{
+                                fontSize: "10px",
+                                fontWeight: "600",
+                                textTransform: "uppercase"
+                              }}>
+                                {c.priority}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{
+                          height: "120px",
+                          background: "linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          position: "relative"
+                        }}>
+                          <i className="fas fa-image" style={{ fontSize: "32px", color: "#9e9e9e", opacity: "0.6" }}></i>
+                          {/* Status and priority for cards without image */}
+                          <div style={{
+                            position: "absolute",
+                            top: "12px",
+                            left: "12px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            backgroundColor: "rgba(255, 255, 255, 0.9)",
+                            backdropFilter: "blur(4px)",
+                            padding: "6px 12px",
+                            borderRadius: "20px",
+                            boxShadow: "0 2px 6px rgba(0,0,0,0.1)"
+                          }}>
+                            <i className={`fas ${c.status === "pending" ? "fa-clock" : 
+                                            c.status === "in_progress" ? "fa-sync-alt" :
+                                            c.status === "resolved" ? "fa-check-circle" :
+                                            c.status === "rejected" ? "fa-times-circle" : "fa-question-circle"}`} style={{
+                              fontSize: "12px",
+                              color: c.status === "pending" ? "#f57c00" : 
+                                     c.status === "in_progress" ? "#1976d2" :
+                                     c.status === "resolved" ? "#4caf50" :
+                                     c.status === "rejected" ? "#f44336" : "#757575",
+                              animation: c.status === "in_progress" ? "spin 2s linear infinite" : "none"
+                            }}></i>
+                            <span style={{
+                              color: c.status === "pending" ? "#f57c00" : 
+                                     c.status === "in_progress" ? "#1976d2" :
+                                     c.status === "resolved" ? "#4caf50" :
+                                     c.status === "rejected" ? "#f44336" : "#757575",
+                              fontSize: "11px",
+                              fontWeight: "600",
+                              textTransform: "uppercase"
+                            }}>
+                              {c.status === "pending" ? "PENDING" :
+                               c.status === "in_progress" ? "IN PROGRESS" :
+                               c.status === "resolved" ? "RESOLVED" :
+                               c.status === "rejected" ? "REJECTED" : c.status.toUpperCase()}
+                            </span>
+                          </div>
+                          {c.priority && (
+                            <div className={c.priority === "High" ? "priority-high" : ""} style={{
+                              position: "absolute",
+                              top: "12px",
+                              right: "12px",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              backgroundColor: c.priority === "High" ? "rgba(244, 67, 54, 0.9)" : 
+                                             c.priority === "Medium" ? "rgba(255, 152, 0, 0.9)" : "rgba(76, 175, 80, 0.9)",
+                              color: "white",
+                              padding: "4px 8px",
+                              borderRadius: "12px",
+                              boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+                              fontWeight: "600"
+                            }}>
+                              <i className={`fas ${c.priority === "High" ? "fa-exclamation-triangle" : 
+                                                  c.priority === "Medium" ? "fa-exclamation-circle" : 
+                                                  "fa-info-circle"}`} style={{ fontSize: "10px" }}></i>
+                              <span style={{
+                                fontSize: "10px",
+                                fontWeight: "600",
+                                textTransform: "uppercase"
+                              }}>
+                                {c.priority}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       )}
 
-                      {/* Description */}
-                      <div style={{ marginBottom: "10px" }}>
-                        <p style={{ 
-                          margin: "0", 
-                          fontSize: "13px", 
-                          lineHeight: "1.3", 
-                          color: "#202124",
-                          fontWeight: "400",
-                          display: "-webkit-box",
-                          WebkitLineClamp: "2",
-                          WebkitBoxOrient: "vertical",
-                          overflow: "hidden"
+                      {/* Card Content */}
+                      <div style={{ padding: "16px" }}>
+                        {/* Date */}
+                        <div style={{ 
+                          display: "flex", 
+                          justifyContent: "flex-end",
+                          marginBottom: "12px" 
                         }}>
-                          {c.description}
-                        </p>
-                      </div>
-
-                      {/* Footer */}
-                      <div style={{ 
-                        display: "flex", 
-                        alignItems: "center", 
-                        justifyContent: "space-between",
-                        paddingTop: "8px",
-                        borderTop: "1px solid #f1f3f4"
-                      }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                          <i className="fas fa-phone" style={{ fontSize: "10px", color: "#5f6368" }}></i>
-                          <span style={{ fontSize: "11px", color: "#5f6368" }}>{c.phone}</span>
-                        </div>
-                        {c.priority && (
-                          <span style={{
-                            backgroundColor: c.priority === "High" ? "#f8d7da" : c.priority === "Medium" ? "#fff3cd" : "#d4edda",
-                            color: c.priority === "High" ? "#721c24" : c.priority === "Medium" ? "#856404" : "#155724",
-                            padding: "1px 5px",
-                            borderRadius: "8px",
-                            fontSize: "9px",
+                          <div style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            color: "#6b7280",
+                            fontSize: "12px",
                             fontWeight: "500"
                           }}>
-                            {c.priority}
-                          </span>
-                        )}
+                            <i className="fas fa-calendar-alt" style={{ fontSize: "11px" }}></i>
+                            <span>
+                              {new Date(c.createdAt).toLocaleDateString('en-US', { 
+                                month: 'short', 
+                                day: 'numeric',
+                                year: new Date(c.createdAt).getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
+                              })}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Expandable content - shown on hover/click */}
+                        <div style={{ 
+                          opacity: "0",
+                          maxHeight: "0",
+                          overflow: "hidden",
+                          transition: "all 0.3s ease",
+                          pointerEvents: "none"
+                        }} className="card-details">
+                          {/* Description */}
+                          <div style={{ marginBottom: "12px" }}>
+                            <p style={{ 
+                              margin: "0", 
+                              fontSize: "14px", 
+                              lineHeight: "1.5", 
+                              color: "#374151",
+                              fontWeight: "400"
+                            }}>
+                              {c.description}
+                            </p>
+                          </div>
+
+                          {/* Contact and Actions */}
+                          <div style={{ 
+                            display: "flex", 
+                            alignItems: "center", 
+                            justifyContent: "space-between",
+                            paddingTop: "12px",
+                            borderTop: "1px solid #f3f4f6"
+                          }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <i className="fas fa-phone" style={{ fontSize: "12px", color: "#6b7280" }}></i>
+                              <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "500" }}>{c.phone}</span>
+                            </div>
+                            
+                            {/* Chat button for department-assigned complaints */}
+                    
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -735,131 +1018,317 @@ function Dashboard() {
             <>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "24px" }}>
                 <i className="fas fa-check-circle" style={{ fontSize: "24px", color: "#34a853", marginRight: "12px" }}></i>
-                <h3 style={{ margin: "0", fontSize: "28px", fontWeight: "500", color: "#202124" }}>Closed Complaints</h3>
+                <h3 style={{ margin: "0", fontSize: "28px", fontWeight: "500", color: "#202124" }}>
+                  Closed Complaints ({closedComplaints.length})
+                </h3>
               </div>
+              
+              {/* Temporary debug info */}
+              {closedComplaints.length > 0 && (
+                <div style={{
+                  marginBottom: "20px",
+                  padding: "10px",
+                  backgroundColor: "#f0f0f0",
+                  borderRadius: "5px",
+                  fontSize: "12px",
+                  color: "#666"
+                }}>
+                  <strong>Debug Info:</strong>{' '}
+                  Resolved: {closedComplaints.filter(c => c.status === "resolved").length},{' '}
+                  Rejected: {closedComplaints.filter(c => c.status === "rejected").length},{' '}
+                  Closed: {closedComplaints.filter(c => c.status === "closed").length}
+                </div>
+              )}
               {closedComplaints.length > 0 ? (
                 <div style={{ 
                   display: "grid", 
                   gridTemplateColumns: window.innerWidth <= 480 
                     ? "1fr" 
                     : window.innerWidth <= 768 
-                      ? "repeat(auto-fill, minmax(250px, 1fr))"
-                      : "repeat(auto-fill, minmax(280px, 1fr))", 
-                  gap: window.innerWidth <= 768 ? "8px" : "12px", 
+                      ? "repeat(auto-fill, minmax(280px, 1fr))"
+                      : "repeat(auto-fill, minmax(320px, 1fr))", 
+                  gap: window.innerWidth <= 768 ? "12px" : "16px", 
                   maxWidth: "1600px", 
                   margin: "0 auto", 
-                  padding: window.innerWidth <= 768 ? "0 8px" : "0 20px"
+                  padding: window.innerWidth <= 768 ? "0 12px" : "0 20px"
                 }}>
                   {closedComplaints.map((c) => (
-                    <div key={c._id} style={{ 
-                      backgroundColor: "white",
-                      borderRadius: "8px", 
-                      padding: "16px", 
-                      boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
+                    <div key={c._id} className="complaint-card" style={{ 
+                      backgroundColor: "#ffffff",
+                      borderRadius: "12px",
+                      overflow: "hidden",
+                      boxShadow: "0 2px 8px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.06)",
                       border: "1px solid #e8eaed",
-                      borderLeft: "3px solid #34a853",
-                      transition: "all 0.3s ease",
-                      cursor: "pointer"
+                      borderLeft: `4px solid ${(c.status === "rejected" || c.status === "rejected_by_user" || c.status === "rejected_no_answer") ? "#f44336" : "#34a853"}`,
+                      cursor: "pointer",
+                      position: "relative",
+                      opacity: "0.95"
                     }}
                     onClick={() => setSelectedComplaint(c)}
                     onMouseOver={(e) => {
-                      e.currentTarget.style.transform = "translateY(-2px)";
-                      e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15), 0 8px 24px rgba(0,0,0,0.1)";
+                      e.currentTarget.style.transform = "translateY(-3px) scale(1.01)";
+                      e.currentTarget.style.boxShadow = (c.status === "rejected" || c.status === "rejected_by_user" || c.status === "rejected_no_answer")
+                        ? "0 8px 25px rgba(244, 67, 54, 0.15), 0 3px 10px rgba(0,0,0,0.1)"
+                        : "0 8px 25px rgba(52, 168, 83, 0.15), 0 3px 10px rgba(0,0,0,0.1)";
+                      e.currentTarget.style.borderLeftColor = (c.status === "rejected" || c.status === "rejected_by_user" || c.status === "rejected_no_answer") ? "#d32f2f" : "#2e7d32";
+                      e.currentTarget.style.opacity = "1";
                     }}
                     onMouseOut={(e) => {
-                      e.currentTarget.style.transform = "translateY(0)";
-                      e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.1), 0 4px 16px rgba(0,0,0,0.05)";
+                      e.currentTarget.style.transform = "translateY(0) scale(1)";
+                      e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.06)";
+                      e.currentTarget.style.borderLeftColor = (c.status === "rejected" || c.status === "rejected_by_user" || c.status === "rejected_no_answer") ? "#f44336" : "#34a853";
+                      e.currentTarget.style.opacity = "0.95";
                     }}
                     >
-                      {/* Card Header */}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                          <span style={{
-                            backgroundColor: "#d4edda",
-                            color: "#155724",
-                            padding: "4px 12px",
-                            borderRadius: "20px",
-                            fontSize: "12px",
-                            fontWeight: "600",
-                            textTransform: "uppercase",
-                            letterSpacing: "0.5px"
-                          }}>
-                            {c.status}
-                          </span>
-                          {c.priority && (
-                            <span style={{
-                              backgroundColor: c.priority === "High" ? "#f8d7da" : c.priority === "Medium" ? "#fff3cd" : "#d4edda",
-                              color: c.priority === "High" ? "#721c24" : c.priority === "Medium" ? "#856404" : "#155724",
-                              padding: "4px 8px",
-                              borderRadius: "12px",
-                              fontSize: "11px",
-                              fontWeight: "500"
-                            }}>
-                              {c.priority}
-                            </span>
-                          )}
-                        </div>
-                        <span style={{ 
-                          fontSize: "13px", 
-                          color: "#5f6368",
-                          backgroundColor: "#f8f9fa",
-                          padding: "4px 8px",
-                          borderRadius: "8px"
-                        }}>
-                          {new Date(c.createdAt).toLocaleDateString('en-US', { 
-                            month: 'short', 
-                            day: 'numeric', 
-                            year: 'numeric' 
-                          })}
-                        </span>
-                      </div>
-
-                      {/* Image */}
-                      {c.imageUrl && (
-                        <div style={{ marginBottom: "16px" }}>
+                      {/* Card Image - Always at top */}
+                      {c.imageUrl ? (
+                        <div style={{ position: "relative" }}>
                           <img 
                             src={c.imageUrl} 
                             alt="Complaint" 
                             style={{ 
                               width: "100%", 
-                              height: "200px", 
-                              objectFit: "cover", 
-                              borderRadius: "8px",
-                              border: "1px solid #e8eaed",
-                              opacity: "0.8"
+                              height: "180px", 
+                              objectFit: "cover",
+                              display: "block",
+                              filter: "grayscale(0.2) brightness(0.9)"
                             }}
                           />
+                          {/* Resolved overlay on image */}
+                          <div style={{
+                            position: "absolute",
+                            top: "12px",
+                            left: "12px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            backgroundColor: c.status === "rejected" ? "rgba(244, 67, 54, 0.95)" : "rgba(76, 175, 80, 0.95)",
+                            color: "white",
+                            padding: "6px 12px",
+                            borderRadius: "20px",
+                            boxShadow: c.status === "rejected" ? "0 2px 8px rgba(244, 67, 54, 0.4)" : "0 2px 8px rgba(76, 175, 80, 0.4)"
+                          }}>
+                            <i className={`fas ${c.status === "rejected" ? "fa-times-circle" : "fa-check-circle"}`} style={{ fontSize: "12px" }}></i>
+                            <span style={{
+                              fontSize: "11px",
+                              fontWeight: "600",
+                              textTransform: "uppercase",
+                              letterSpacing: "0.5px"
+                            }}>
+                              {c.status === "rejected" ? "REJECTED" : "RESOLVED"}
+                            </span>
+                          </div>
+                          {/* Priority badge on image */}
+                          {c.priority && (
+                            <div style={{
+                              position: "absolute",
+                              top: "12px",
+                              right: "12px",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              backgroundColor: c.priority === "High" ? "rgba(244, 67, 54, 0.8)" : 
+                                             c.priority === "Medium" ? "rgba(255, 152, 0, 0.8)" : "rgba(76, 175, 80, 0.8)",
+                              color: "white",
+                              padding: "4px 8px",
+                              borderRadius: "12px",
+                              boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
+                              opacity: "0.8"
+                            }}>
+                              <i className={`fas ${c.priority === "High" ? "fa-exclamation-triangle" : 
+                                                  c.priority === "Medium" ? "fa-exclamation-circle" : 
+                                                  "fa-info-circle"}`} style={{ fontSize: "10px" }}></i>
+                              <span style={{
+                                fontSize: "10px",
+                                fontWeight: "600",
+                                textTransform: "uppercase"
+                              }}>
+                                {c.priority}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{
+                          height: "120px",
+                          background: "linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          position: "relative"
+                        }}>
+                          <i className="fas fa-image" style={{ fontSize: "32px", color: "#81c784", opacity: "0.6" }}></i>
+                          {/* Status for cards without image */}
+                          <div style={{
+                            position: "absolute",
+                            top: "12px",
+                            left: "12px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            backgroundColor: c.status === "rejected" ? "rgba(244, 67, 54, 0.9)" : "rgba(76, 175, 80, 0.9)",
+                            color: "white",
+                            padding: "6px 12px",
+                            borderRadius: "20px",
+                            boxShadow: c.status === "rejected" ? "0 2px 6px rgba(244, 67, 54, 0.3)" : "0 2px 6px rgba(76, 175, 80, 0.3)"
+                          }}>
+                            <i className={`fas ${c.status === "rejected" ? "fa-times-circle" : "fa-check-circle"}`} style={{ fontSize: "12px" }}></i>
+                            <span style={{
+                              fontSize: "11px",
+                              fontWeight: "600",
+                              textTransform: "uppercase"
+                            }}>
+                              {c.status === "rejected" ? "REJECTED" : "RESOLVED"}
+                            </span>
+                          </div>
+                          {c.priority && (
+                            <div style={{
+                              position: "absolute",
+                              top: "12px",
+                              right: "12px",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              backgroundColor: c.priority === "High" ? "rgba(244, 67, 54, 0.8)" : 
+                                             c.priority === "Medium" ? "rgba(255, 152, 0, 0.8)" : "rgba(76, 175, 80, 0.8)",
+                              color: "white",
+                              padding: "4px 8px",
+                              borderRadius: "12px",
+                              boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+                              opacity: "0.8"
+                            }}>
+                              <i className={`fas ${c.priority === "High" ? "fa-exclamation-triangle" : 
+                                                  c.priority === "Medium" ? "fa-exclamation-circle" : 
+                                                  "fa-info-circle"}`} style={{ fontSize: "10px" }}></i>
+                              <span style={{
+                                fontSize: "10px",
+                                fontWeight: "600",
+                                textTransform: "uppercase"
+                              }}>
+                                {c.priority}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       )}
 
-                      {/* Description */}
-                      <div style={{ marginBottom: "16px" }}>
-                        <p style={{ 
-                          margin: "0", 
-                          fontSize: "16px", 
-                          lineHeight: "1.5", 
-                          color: "#202124",
-                          fontWeight: "400"
+                      {/* Card Content */}
+                      <div style={{ padding: "16px" }}>
+                        {/* Date */}
+                        <div style={{ 
+                          display: "flex", 
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          marginBottom: "12px" 
                         }}>
-                          {c.description}
-                        </p>
-                      </div>
-
-                      {/* Footer */}
-                      <div style={{ 
-                        display: "flex", 
-                        alignItems: "center", 
-                        justifyContent: "space-between",
-                        paddingTop: "16px",
-                        borderTop: "1px solid #f1f3f4"
-                      }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                          <i className="fas fa-phone" style={{ fontSize: "14px", color: "#5f6368" }}></i>
-                          <span style={{ fontSize: "14px", color: "#5f6368" }}>{c.phone}</span>
+                          <div style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            backgroundColor: (c.status === "rejected" || c.status === "rejected_by_user" || c.status === "rejected_no_answer") ? "#fef2f2" : "#e8f5e9",
+                            color: (c.status === "rejected" || c.status === "rejected_by_user" || c.status === "rejected_no_answer") ? "#dc2626" : "#2e7d32",
+                            padding: "4px 8px",
+                            borderRadius: "12px",
+                            fontSize: "10px",
+                            fontWeight: "600"
+                          }}>
+                            <i className={`fas ${(c.status === "rejected" || c.status === "rejected_by_user" || c.status === "rejected_no_answer") ? "fa-times" : "fa-check"}`} style={{ fontSize: "9px" }}></i>
+                            <span>{(c.status === "rejected" || c.status === "rejected_by_user" || c.status === "rejected_no_answer") ? "REJECTED" : "COMPLETED"}</span>
+                          </div>
+                          <div style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            color: "#6b7280",
+                            fontSize: "12px",
+                            fontWeight: "500"
+                          }}>
+                            <i className="fas fa-calendar-alt" style={{ fontSize: "11px" }}></i>
+                            <span>
+                              {new Date(c.createdAt).toLocaleDateString('en-US', { 
+                                month: 'short', 
+                                day: 'numeric',
+                                year: new Date(c.createdAt).getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
+                              })}
+                            </span>
+                          </div>
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                          <i className="fas fa-check" style={{ fontSize: "14px", color: "#34a853" }}></i>
-                          <span style={{ fontSize: "14px", color: "#34a853", fontWeight: "500" }}>Resolved</span>
+
+                        {/* Expandable content - shown on hover/click */}
+                        <div style={{ 
+                          opacity: "0",
+                          maxHeight: "0",
+                          overflow: "hidden",
+                          transition: "all 0.3s ease",
+                          pointerEvents: "none"
+                        }} className="card-details">
+                          {/* Description */}
+                          <div style={{ marginBottom: "12px" }}>
+                            <p style={{ 
+                              margin: "0", 
+                              fontSize: "14px", 
+                              lineHeight: "1.5", 
+                              color: "#374151",
+                              fontWeight: "400"
+                            }}>
+                              {c.description}
+                            </p>
+                            
+                            {/* Rejection Reason - Only show for rejected complaints */}
+                            {c.status === "rejected" && c.rejectionReason && (
+                              <div style={{
+                                marginTop: "12px",
+                                padding: "12px",
+                                backgroundColor: "#fef2f2",
+                                border: "1px solid #fecaca",
+                                borderRadius: "6px"
+                              }}>
+                                <div style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                  marginBottom: "6px"
+                                }}>
+                                  <i className="fas fa-exclamation-triangle" style={{ 
+                                    fontSize: "12px", 
+                                    color: "#dc2626" 
+                                  }}></i>
+                                  <span style={{
+                                    fontSize: "12px",
+                                    fontWeight: "600",
+                                    color: "#dc2626",
+                                    textTransform: "uppercase",
+                                    letterSpacing: "0.5px"
+                                  }}>
+                                    Rejection Reason
+                                  </span>
+                                </div>
+                                <p style={{
+                                  margin: "0",
+                                  fontSize: "13px",
+                                  color: "#991b1b",
+                                  fontStyle: "italic",
+                                  lineHeight: "1.4"
+                                }}>
+                                  {c.rejectionReason}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Contact and Actions */}
+                          <div style={{ 
+                            display: "flex", 
+                            alignItems: "center", 
+                            justifyContent: "space-between",
+                            paddingTop: "12px",
+                            borderTop: "1px solid #f3f4f6"
+                          }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <i className="fas fa-phone" style={{ fontSize: "12px", color: "#6b7280" }}></i>
+                              <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "500" }}>{c.phone}</span>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -876,8 +1345,53 @@ function Dashboard() {
 
           {activeTab === "explore" && (
             <>
-              <h3>🗺️ Explore Pending Complaints</h3>
+              <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FontAwesomeIcon icon={faMap} style={{ color: '#1a73e8' }} /> 
+                Explore Pending Complaints
+              </h3>
               <ExploreComplaints token={token} />
+            </>
+          )}
+
+          {activeTab === "community" && (
+            <CommunityComplaints token={token} />
+          )}
+
+          {activeTab === "janawaaz" && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "24px" }}>
+                <i className="fas fa-trophy" style={{ fontSize: "24px", color: "#f57f17", marginRight: "12px" }}></i>
+                <h3 style={{ margin: "0", fontSize: "28px", fontWeight: "500", color: "#202124" }}>Janawaaz - Public Recognition</h3>
+              </div>
+              <div style={{ 
+                backgroundColor: "white", 
+                borderRadius: "8px", 
+                boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
+                border: "1px solid #e8eaed",
+                height: "calc(100vh - 200px)",
+                overflow: "hidden"
+              }}>
+                <Janawaaz token={token} />
+              </div>
+            </>
+          )}
+
+          {activeTab === "rewards" && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "24px" }}>
+                <i className="fas fa-gift" style={{ fontSize: "24px", color: "#f57f17", marginRight: "12px" }}></i>
+                <h3 style={{ margin: "0", fontSize: "28px", fontWeight: "500", color: "#202124" }}>Rewards Center</h3>
+              </div>
+              <div style={{ 
+                backgroundColor: "white", 
+                borderRadius: "8px", 
+                boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
+                border: "1px solid #e8eaed",
+                height: "calc(100vh - 200px)",
+                overflow: "auto"
+              }}>
+                <Rewards />
+              </div>
             </>
           )}
         </div>
@@ -922,16 +1436,38 @@ function Dashboard() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                 <span style={{
-                  backgroundColor: selectedComplaint.status === "pending" ? "#fff3cd" : "#d4edda",
-                  color: selectedComplaint.status === "pending" ? "#856404" : "#155724",
+                  backgroundColor: selectedComplaint.status === "pending" ? "#fff3cd" : 
+                                   selectedComplaint.status === "in_progress" ? "#cce5ff" :
+                                   selectedComplaint.status === "resolved" ? "#d4edda" :
+                                   selectedComplaint.status === "rejected" ? "#f8d7da" :
+                                   selectedComplaint.status === "rejected_by_user" ? "#f8d7da" :
+                                   selectedComplaint.status === "rejected_no_answer" ? "#f8d7da" : "#e2e3e5",
+                  color: selectedComplaint.status === "pending" ? "#856404" : 
+                         selectedComplaint.status === "in_progress" ? "#004085" :
+                         selectedComplaint.status === "resolved" ? "#155724" :
+                         selectedComplaint.status === "rejected" ? "#721c24" :
+                         selectedComplaint.status === "rejected_by_user" ? "#721c24" :
+                         selectedComplaint.status === "rejected_no_answer" ? "#721c24" : "#495057",
                   padding: "6px 16px",
                   borderRadius: "24px",
                   fontSize: "14px",
                   fontWeight: "600",
                   textTransform: "uppercase",
-                  letterSpacing: "0.5px"
+                  letterSpacing: "0.5px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px"
                 }}>
-                  {selectedComplaint.status}
+                  <i className={`fas ${
+                    selectedComplaint.status === "pending" ? "fa-clock" : 
+                    selectedComplaint.status === "in_progress" ? "fa-sync-alt" : 
+                    selectedComplaint.status === "resolved" ? "fa-check-circle" :
+                    selectedComplaint.status === "rejected" ? "fa-times-circle" : "fa-question-circle"
+                  }`} style={{ 
+                    fontSize: "12px",
+                    animation: selectedComplaint.status === "in_progress" ? "spin 2s linear infinite" : "none"
+                  }}></i>
+                  {selectedComplaint.status.replace("_", " ").toUpperCase()}
                 </span>
                 {selectedComplaint.priority && (
                   <span style={{
@@ -1012,8 +1548,30 @@ function Dashboard() {
               </p>
             </div>
 
-            {/* Reason Section */}
-            {selectedComplaint.reason && (
+            {/* Rejection Reason Section - Only show for rejected complaints */}
+            {selectedComplaint.status === "rejected" && selectedComplaint.rejectionReason && (
+              <div style={{ marginBottom: "24px" }}>
+                <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "500", color: "#d32f2f" }}>
+                  <i className="fas fa-times-circle" style={{ marginRight: "8px", color: "#d32f2f" }}></i>
+                  Rejection Reason
+                </h3>
+                <p style={{ 
+                  margin: "0", 
+                  fontSize: "15px", 
+                  lineHeight: "1.5", 
+                  color: "#721c24",
+                  padding: "12px",
+                  backgroundColor: "#f8d7da",
+                  borderRadius: "8px",
+                  border: "1px solid #f5c6cb"
+                }}>
+                  {selectedComplaint.rejectionReason}
+                </p>
+              </div>
+            )}
+
+            {/* Reason Section - Only show for pending complaints */}
+            {selectedComplaint.reason && selectedComplaint.status === "pending" && (
               <div style={{ marginBottom: "24px" }}>
                 <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "500", color: "#202124" }}>
                   Reason
@@ -1189,8 +1747,8 @@ function Dashboard() {
                 </div>
               )}
 
-              {/* Show reason/category if it exists */}
-              {selectedComplaint.reason && (
+              {/* Show reason/category if it exists - Only for pending complaints */}
+              {selectedComplaint.reason && selectedComplaint.status === "pending" && (
                 <div style={{ 
                   padding: "16px",
                   backgroundColor: "#f8f9fa",
@@ -1515,7 +2073,7 @@ function Dashboard() {
               }
 
               // Handle password change
-              fetch("http://localhost:5000/user/change-password", {
+              fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/user/change-password`, {
                 method: "PUT",
                 headers: {
                   "Authorization": `Bearer ${token}`,
@@ -1702,7 +2260,7 @@ function Dashboard() {
               };
               
               // Handle profile update
-              fetch("http://localhost:5000/user/profile", {
+              fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/user/profile`, {
                 method: "PUT",
                 headers: {
                   "Authorization": `Bearer ${token}`,
@@ -1710,7 +2268,16 @@ function Dashboard() {
                 },
                 body: JSON.stringify(updatedDetails)
               })
-              .then(res => res.json())
+              .then(res => {
+                if (!res.ok) {
+                  throw new Error(`HTTP error! status: ${res.status}`);
+                }
+                const contentType = res.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                  throw new Error('Server returned non-JSON response. Please check if the server is running correctly.');
+                }
+                return res.json();
+              })
               .then(data => {
                 if (data.error) {
                   alert(data.error);
@@ -1722,7 +2289,11 @@ function Dashboard() {
               })
               .catch(error => {
                 console.error('Error updating profile:', error);
-                alert('Failed to update profile. Please try again.');
+                if (error.message.includes('non-JSON response')) {
+                  alert('Server error: The server is not responding correctly. Please check if the backend is running.');
+                } else {
+                  alert('Failed to update profile. Please try again.');
+                }
               });
             }}>
               <div style={{ 
@@ -1959,6 +2530,8 @@ function Dashboard() {
           </div>
         </div>
       )}
+
+      
     </div>
     </>
   );
