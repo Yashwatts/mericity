@@ -139,8 +139,8 @@ PUT  /notifications/:id/read     # Mark as read
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/rohit-2059/Civic-Sense-Crowdsourced-Issue-Reporting.git
-cd Civic-Sense-Crowdsourced-Issue-Reporting
+git clone https://github.com/Yashwatts/mericity.git
+cd mericity
 ```
 
 ### 2. Backend Setup
